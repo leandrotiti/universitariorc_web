@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { UserRole, RoleLabels, userModelFromMap } from '../../models/UserModel';
+import { UserRole, RoleLabels, userModelFromMap, getDisplayName } from '../../models/UserModel';
 import { divisionModelFromMap } from '../../models/DivisionModel';
 import { playerModelFromMap } from '../../models/PlayerModel';
 import ReportsPage from '../admin/ReportsPage';
@@ -17,8 +17,11 @@ import {
     Groups, Assessment, CalendarMonth, Visibility
 } from '@mui/icons-material';
 import { db, secondaryApp } from '../../config/firebase';
-import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
-import { collection, query, where, onSnapshot, doc, updateDoc, deleteDoc, getDocs, writeBatch, setDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
+import { getAuth, createUserWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
+import { collection, query, where, onSnapshot, doc, updateDoc, deleteDoc, getDocs, getDoc, writeBatch, setDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
+import { AddressModel } from '../../models/AddressModel';
+import AddressDialog from '../../components/shared/AddressDialog';
+import PlayerAttendanceDialog from '../../components/shared/PlayerAttendanceDialog';
 
 export default function BlockAdminDashboard({ page }) {
     const { userModel } = useAuth();
@@ -198,7 +201,7 @@ function BlockUsersTab({ block, allowedDivisionIds }) {
                         <IconButton size="small" onClick={() => setEditUser(u)}><Edit fontSize="small" /></IconButton>
                     }>
                         <ListItemAvatar><Avatar sx={{ bgcolor: getRoleColor(u.roles[0]) }}>{u.name?.[0]?.toUpperCase() || '?'}</Avatar></ListItemAvatar>
-                        <ListItemText primary={u.name} secondary={<>{u.email}<br />{u.roles.map(r => RoleLabels[r] || r).join(', ')}</>} />
+                        <ListItemText primary={getDisplayName(u) || u.name} secondary={<>{u.email}<br />{u.roles.map(r => RoleLabels[r] || r).join(', ')}</>} />
                     </ListItem>
                 ))}
             </List>
@@ -214,24 +217,32 @@ function BlockUsersTab({ block, allowedDivisionIds }) {
 // ─── Block Create User Dialog (scoped to block divisions) ──────────
 function BlockCreateUserDialog({ open, onClose, divisions, players, blockId, onSuccess }) {
     const [name, setName] = useState('');
+    const [nickname, setNickname] = useState('');
     const [email, setEmail] = useState('');
     const [dni, setDni] = useState('');
     const [phone, setPhone] = useState('');
+    const [obraSocial, setObraSocial] = useState('');
+    const [emergencyContactName, setEmergencyContactName] = useState('');
+    const [emergencyContactPhone, setEmergencyContactPhone] = useState('');
     const [birthDate, setBirthDate] = useState('');
     const [selectedRoles, setSelectedRoles] = useState(['player']);
     const [selectedDivisionId, setSelectedDivisionId] = useState('');
+    const [selectedManagerDivIds, setSelectedManagerDivIds] = useState([]);
     const [selectedCoachDivIds, setSelectedCoachDivIds] = useState([]);
     const [selectedPlayerIds, setSelectedPlayerIds] = useState([]);
     const [loading, setLoading] = useState(false);
+    const [addressOpen, setAddressOpen] = useState(false);
+    const [userAddress, setUserAddress] = useState(null);
 
     const allowedRoles = ['player', 'coach', 'manager', 'parent'];
     const activeDivisions = [...divisions].sort((a, b) => { const n = a.name.match(/\d+/); const m = b.name.match(/\d+/); if (n && m) return parseInt(n[0]) - parseInt(m[0]); return a.name.localeCompare(b.name); });
 
     useEffect(() => {
         if (!open) return;
-        setName(''); setEmail(''); setDni(''); setPhone(''); setBirthDate('');
-        setSelectedRoles(['player']); setSelectedDivisionId(''); setSelectedCoachDivIds([]);
-        setSelectedPlayerIds([]); setLoading(false);
+        setName(''); setNickname(''); setEmail(''); setDni(''); setPhone(''); setBirthDate('');
+        setObraSocial(''); setEmergencyContactName(''); setEmergencyContactPhone('');
+        setSelectedRoles(['player']); setSelectedDivisionId(''); setSelectedManagerDivIds([]); setSelectedCoachDivIds([]);
+        setSelectedPlayerIds([]); setLoading(false); setUserAddress(null);
     }, [open]);
 
     const toggleRole = (role) => {
@@ -245,29 +256,44 @@ function BlockCreateUserDialog({ open, onClose, divisions, players, blockId, onS
         if (!name.trim() || !email.trim() || !dni.trim() || !phone.trim()) { alert('Todos los campos son requeridos'); return; }
         if (!email.includes('@')) { alert('Email inválido'); return; }
         if (selectedRoles.includes('player') && !birthDate) { alert('Fecha de nacimiento es requerida para jugadores'); return; }
-        if ((selectedRoles.includes('player') || selectedRoles.includes('manager')) && !selectedDivisionId) { alert('División es requerida'); return; }
+        if (selectedRoles.includes('manager') && selectedManagerDivIds.length === 0) { alert('División es requerida'); return; }
+        if (selectedRoles.includes('player') && !selectedDivisionId) { alert('División es requerida'); return; }
         setLoading(true);
         try {
             const existingEmail = await getDocs(query(collection(db, 'users'), where('email', '==', email.trim())));
             if (!existingEmail.empty) { alert('Este email ya está registrado'); setLoading(false); return; }
             const existingDni = await getDocs(query(collection(db, 'users'), where('dni', '==', dni.trim())));
             if (!existingDni.empty) { alert('Este DNI ya está registrado'); setLoading(false); return; }
-            if (selectedRoles.includes('manager') && selectedDivisionId) {
-                const existingMgr = await getDocs(query(collection(db, 'users'), where('roles', 'array-contains', 'manager'), where('assignedDivisionId', '==', selectedDivisionId)));
-                if (!existingMgr.empty) { alert('Esta división ya tiene un manager asignado'); setLoading(false); return; }
-            }
+            // Manager checking logic removed to support multiple divisions
             const secondaryAuth = getAuth(secondaryApp);
             const cred = await createUserWithEmailAndPassword(secondaryAuth, email.trim(), dni.trim());
             const userId = cred.user.uid;
             await secondaryAuth.signOut();
             const username = email.trim().split('@')[0];
             const nameLower = name.trim().toLowerCase();
+            const nicknameLower = nickname.trim().toLowerCase();
             const keywords = [...nameLower.split(' '), email.trim().toLowerCase(), username, dni.trim()];
+            if (nicknameLower) {
+                keywords.push(nicknameLower);
+                keywords.push(...nicknameLower.split(' '));
+            }
+
+            let addressId = null;
+            if (userAddress) {
+                const docRef = doc(collection(db, 'addresses'));
+                addressId = docRef.id;
+                userAddress.id = addressId;
+                await setDoc(docRef, userAddress.toMap());
+            }
+
             await setDoc(doc(db, 'users', userId), {
-                id: userId, name: name.trim(), email: email.trim(), username, dni: dni.trim(), phone: phone.trim(),
+                id: userId, name: name.trim(), nickname: nickname.trim(), email: email.trim(), username, dni: dni.trim(), phone: phone.trim(),
+                obraSocial: obraSocial.trim(), emergencyContactName: emergencyContactName.trim(), emergencyContactPhone: emergencyContactPhone.trim(),
+                addressId,
                 birthDate: birthDate ? new Date(birthDate).toISOString() : null,
                 role: selectedRoles[0], roles: selectedRoles,
-                assignedDivisionId: selectedDivisionId || null,
+                assignedDivisionId: selectedRoles.includes('manager') ? (selectedManagerDivIds.length > 0 ? selectedManagerDivIds[0] : null) : (selectedDivisionId || null),
+                assignedDivisionIds: selectedRoles.includes('manager') ? selectedManagerDivIds : [],
                 assignedBlockId: null,
                 assignedPlayerIds: selectedPlayerIds,
                 createdAt: new Date(), keywords,
@@ -275,8 +301,10 @@ function BlockCreateUserDialog({ open, onClose, divisions, players, blockId, onS
             if (selectedRoles.includes('player') && selectedDivisionId) {
                 const playerRef = doc(collection(db, 'players'));
                 await setDoc(playerRef, {
-                    id: playerRef.id, name: name.trim(), divisionId: selectedDivisionId, dni: dni.trim(),
+                    id: playerRef.id, name: name.trim(), nickname: nickname.trim(), divisionId: selectedDivisionId, dni: dni.trim(),
                     userId, birthDate: new Date(birthDate).toISOString(), phone: phone.trim(), email: email.trim(),
+                    obraSocial: obraSocial.trim(), emergencyContactName: emergencyContactName.trim(), emergencyContactPhone: emergencyContactPhone.trim(),
+                    addressId,
                     clubFeePayments: {}, paidPlayerRightsYears: [], photoUrl: null,
                 });
             }
@@ -294,24 +322,53 @@ function BlockCreateUserDialog({ open, onClose, divisions, players, blockId, onS
         <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
             <DialogTitle>Crear Usuario</DialogTitle>
             <DialogContent>
-                <TextField fullWidth label="Nombre Completo *" value={name} onChange={e => setName(e.target.value)} sx={{ mt: 1 }} />
+                <TextField fullWidth label="Nombre y Apellido *" value={name} onChange={e => setName(e.target.value)} sx={{ mt: 1 }} />
+                <TextField fullWidth label="Apodo (Opcional)" value={nickname} onChange={e => setNickname(e.target.value)} sx={{ mt: 2 }} />
                 <TextField fullWidth label="Email *" value={email} onChange={e => setEmail(e.target.value)} type="email" sx={{ mt: 2 }} />
                 <TextField fullWidth label="DNI (Contraseña inicial) *" value={dni} onChange={e => setDni(e.target.value)} sx={{ mt: 2 }} helperText="El DNI será usado como contraseña inicial" />
                 <TextField fullWidth label="Teléfono *" value={phone} onChange={e => setPhone(e.target.value)} sx={{ mt: 2 }} />
+                <TextField fullWidth label="Obra Social (Opcional)" value={obraSocial} onChange={e => setObraSocial(e.target.value)} sx={{ mt: 2 }} />
+                <TextField fullWidth label="Contacto Emergencia (Nombre) (Opcional)" value={emergencyContactName} onChange={e => setEmergencyContactName(e.target.value)} sx={{ mt: 2 }} />
+                <TextField fullWidth label="Contacto Emergencia (Teléfono) (Opcional)" value={emergencyContactPhone} onChange={e => setEmergencyContactPhone(e.target.value)} sx={{ mt: 2 }} />
                 <TextField fullWidth label="Fecha de Nacimiento" type="date" value={birthDate} onChange={e => setBirthDate(e.target.value)} sx={{ mt: 2 }} InputLabelProps={{ shrink: true }} helperText={selectedRoles.includes('player') ? 'Requerido para jugadores' : ''} />
+
+                <Box sx={{ mt: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    <Button variant="outlined" onClick={() => setAddressOpen(true)} startIcon={<Add />}>
+                        {userAddress ? 'Editar Dirección' : 'Cargar Dirección'}
+                    </Button>
+                    {userAddress && (
+                        <Typography variant="caption" color="text.secondary">
+                            {userAddress.calle} {userAddress.numero}{userAddress.departamento ? ` Dpto: ${userAddress.departamento}` : ''}, {userAddress.localidad}
+                        </Typography>
+                    )}
+                </Box>
+
                 <Typography variant="subtitle2" sx={{ mt: 2, fontWeight: 700 }}>Roles</Typography>
                 <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 0.5 }}>
                     {allowedRoles.map(role => (
                         <Chip key={role} label={RoleLabels[role] || role} color={selectedRoles.includes(role) ? 'primary' : 'default'} variant={selectedRoles.includes(role) ? 'filled' : 'outlined'} onClick={() => toggleRole(role)} size="small" />
                     ))}
                 </Box>
-                {(selectedRoles.includes('player') || selectedRoles.includes('manager')) && (
+                {selectedRoles.includes('player') && (
                     <FormControl fullWidth sx={{ mt: 2 }}>
                         <InputLabel>Asignar División *</InputLabel>
                         <Select value={selectedDivisionId} label="Asignar División *" onChange={e => setSelectedDivisionId(e.target.value)}>
                             {activeDivisions.map(d => <MenuItem key={d.id} value={d.id}>{d.name} ({d.year})</MenuItem>)}
                         </Select>
                     </FormControl>
+                )}
+                {selectedRoles.includes('manager') && (
+                    <Box sx={{ mt: 2 }}>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Asignar Divisiones (Manager)</Typography>
+                        <Box sx={{ maxHeight: 150, overflow: 'auto', border: 1, borderColor: 'divider', borderRadius: 1, mt: 0.5 }}>
+                            {activeDivisions.map(d => (
+                                <ListItemButton key={d.id} dense onClick={() => setSelectedManagerDivIds(prev => prev.includes(d.id) ? prev.filter(x => x !== d.id) : [...prev, d.id])}>
+                                    <Checkbox checked={selectedManagerDivIds.includes(d.id)} size="small" />
+                                    <ListItemText primary={d.name} />
+                                </ListItemButton>
+                            ))}
+                        </Box>
+                    </Box>
                 )}
                 {selectedRoles.includes('coach') && (
                     <Box sx={{ mt: 2 }}>
@@ -333,7 +390,7 @@ function BlockCreateUserDialog({ open, onClose, divisions, players, blockId, onS
                             {players.map(p => (
                                 <ListItemButton key={p.id} dense onClick={() => setSelectedPlayerIds(prev => prev.includes(p.id) ? prev.filter(x => x !== p.id) : [...prev, p.id])}>
                                     <Checkbox checked={selectedPlayerIds.includes(p.id)} size="small" />
-                                    <ListItemText primary={p.name} secondary={`DNI: ${p.dni}`} />
+                                    <ListItemText primary={p.nickname ? `"${p.nickname}" ${p.name}` : p.name} secondary={`DNI: ${p.dni}`} />
                                 </ListItemButton>
                             ))}
                         </Box>
@@ -345,6 +402,13 @@ function BlockCreateUserDialog({ open, onClose, divisions, players, blockId, onS
                 <Button onClick={onClose} color="inherit">Cancelar</Button>
                 <Button onClick={handleCreate} variant="contained" disabled={loading}>{loading ? <CircularProgress size={20} /> : 'Crear'}</Button>
             </DialogActions>
+
+            <AddressDialog
+                open={addressOpen}
+                initialAddress={userAddress}
+                onClose={() => setAddressOpen(false)}
+                onSave={(addr) => setUserAddress(addr)}
+            />
         </Dialog>
     );
 }
@@ -490,8 +554,9 @@ function BlockDivisionPlayerList({ division, onCreatePlayer, onEditPlayer, snack
                 setCoaches(snap.docs.map(d => userModelFromMap({ ...d.data(), id: d.id })));
             }));
         }
-        unsubs.push(onSnapshot(query(collection(db, 'users'), where('assignedDivisionId', '==', division.id), where('roles', 'array-contains', 'manager')), snap => {
-            setManagers(snap.docs.map(d => userModelFromMap({ ...d.data(), id: d.id })));
+        unsubs.push(onSnapshot(query(collection(db, 'users'), where('roles', 'array-contains', 'manager')), snap => {
+            setManagers(snap.docs.map(d => userModelFromMap({ ...d.data(), id: d.id }))
+                .filter(m => m.assignedDivisionId === division.id || m.assignedDivisionIds?.includes(division.id)));
         }));
         return () => unsubs.forEach(u => u());
     }, [division.id, division.coachIds]);
@@ -536,7 +601,7 @@ function BlockDivisionPlayerList({ division, onCreatePlayer, onEditPlayer, snack
                 <Box key={p.id} sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.5, px: 1 }}>
                     <Avatar sx={{ width: 28, height: 28, fontSize: 12 }}>{p.name?.[0]?.toUpperCase()}</Avatar>
                     <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Typography sx={{ fontSize: 14, fontWeight: 500 }} noWrap>{p.name}</Typography>
+                        <Typography sx={{ fontSize: 14, fontWeight: 500 }} noWrap>{p.nickname ? `"${p.nickname}" ${p.name}` : p.name}</Typography>
                         <Typography sx={{ fontSize: 12, color: 'text.secondary' }} noWrap>DNI: {p.dni || '-'}</Typography>
                     </Box>
                     <Tooltip title="Ver Perfil"><IconButton size="small" color="info" onClick={(e) => { e.stopPropagation(); setViewPlayer(p); }}><Visibility fontSize="small" /></IconButton></Tooltip>
@@ -590,12 +655,18 @@ function BlockCreateDivisionDialog({ open, blockId, onClose, onSuccess }) {
 // ─── Block Create Player Dialog ────────────────────────────────────
 function BlockCreatePlayerDialog({ division, onClose, onSuccess }) {
     const [name, setName] = useState('');
+    const [nickname, setNickname] = useState('');
     const [email, setEmail] = useState('');
     const [dni, setDni] = useState('');
     const [phone, setPhone] = useState('');
+    const [obraSocial, setObraSocial] = useState('');
+    const [emergencyContactName, setEmergencyContactName] = useState('');
+    const [emergencyContactPhone, setEmergencyContactPhone] = useState('');
     const [birthDate, setBirthDate] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
+    const [addressOpen, setAddressOpen] = useState(false);
+    const [playerAddress, setPlayerAddress] = useState(null);
 
     const handleCreate = async () => {
         if (!name.trim()) { setError('El nombre es obligatorio.'); return; }
@@ -614,9 +685,25 @@ function BlockCreatePlayerDialog({ division, onClose, onSuccess }) {
             await secondaryAuth.signOut();
             const username = email.trim().split('@')[0];
             const nameLower = name.trim().toLowerCase();
+            const nicknameLower = nickname.trim().toLowerCase();
             const keywords = [nameLower, ...nameLower.split(' '), email.trim().toLowerCase(), dni.trim()];
+            if (nicknameLower) {
+                keywords.push(nicknameLower);
+                keywords.push(...nicknameLower.split(' '));
+            }
+
+            let addressId = null;
+            if (playerAddress) {
+                const docRef = doc(collection(db, 'addresses'));
+                addressId = docRef.id;
+                playerAddress.id = addressId;
+                await setDoc(docRef, playerAddress.toMap());
+            }
+
             await setDoc(doc(db, 'users', userId), {
-                id: userId, email: email.trim(), name: name.trim(), username, dni: dni.trim(), phone: phone.trim(),
+                id: userId, email: email.trim(), name: name.trim(), nickname: nickname.trim(), username, dni: dni.trim(), phone: phone.trim(),
+                obraSocial: obraSocial.trim(), emergencyContactName: emergencyContactName.trim(), emergencyContactPhone: emergencyContactPhone.trim(),
+                addressId,
                 birthDate: birthDate ? new Date(birthDate).toISOString() : null,
                 roles: ['player'], role: 'player',
                 assignedDivisionId: division.id, assignedBlockId: null, assignedPlayerIds: [],
@@ -624,7 +711,9 @@ function BlockCreatePlayerDialog({ division, onClose, onSuccess }) {
             });
             const playerRef = doc(collection(db, 'players'));
             await setDoc(playerRef, {
-                id: playerRef.id, userId, name: name.trim(), email: email.trim(), dni: dni.trim(), phone: phone.trim(),
+                id: playerRef.id, userId, name: name.trim(), nickname: nickname.trim(), email: email.trim(), dni: dni.trim(), phone: phone.trim(),
+                obraSocial: obraSocial.trim(), emergencyContactName: emergencyContactName.trim(), emergencyContactPhone: emergencyContactPhone.trim(),
+                addressId,
                 birthDate: birthDate ? new Date(birthDate).toISOString() : null,
                 divisionId: division.id, clubFeePayments: {}, paidPlayerRightsYears: [],
             });
@@ -642,13 +731,28 @@ function BlockCreatePlayerDialog({ division, onClose, onSuccess }) {
             <DialogTitle>Agregar Jugador a {division.name}</DialogTitle>
             <DialogContent>
                 {error && <Alert severity="error" sx={{ mt: 1, mb: 1 }}>{error}</Alert>}
-                <TextField fullWidth label="Nombre completo" value={name} onChange={e => setName(e.target.value)} sx={{ mt: 1 }} autoFocus />
+                <TextField fullWidth label="Nombre y Apellido" value={name} onChange={e => setName(e.target.value)} sx={{ mt: 1 }} autoFocus />
+                <TextField fullWidth label="Apodo (Opcional)" value={nickname} onChange={e => setNickname(e.target.value)} sx={{ mt: 2 }} />
                 <TextField fullWidth label="Email" type="email" value={email} onChange={e => setEmail(e.target.value)} sx={{ mt: 2 }}
                     helperText="El nombre de usuario se generará automáticamente del email" />
                 <TextField fullWidth label="DNI (se usa como contraseña inicial)" value={dni} onChange={e => setDni(e.target.value)} sx={{ mt: 2 }} />
                 <TextField fullWidth label="Teléfono" value={phone} onChange={e => setPhone(e.target.value)} sx={{ mt: 2 }} />
+                <TextField fullWidth label="Obra Social (Opcional)" value={obraSocial} onChange={e => setObraSocial(e.target.value)} sx={{ mt: 2 }} />
+                <TextField fullWidth label="Contacto Emergencia (Nombre) (Opcional)" value={emergencyContactName} onChange={e => setEmergencyContactName(e.target.value)} sx={{ mt: 2 }} />
+                <TextField fullWidth label="Contacto Emergencia (Teléfono) (Opcional)" value={emergencyContactPhone} onChange={e => setEmergencyContactPhone(e.target.value)} sx={{ mt: 2 }} />
                 <TextField fullWidth label="Fecha de Nacimiento" type="date" value={birthDate} onChange={e => setBirthDate(e.target.value)}
                     sx={{ mt: 2 }} InputLabelProps={{ shrink: true }} />
+
+                <Box sx={{ mt: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    <Button variant="outlined" onClick={() => setAddressOpen(true)} startIcon={<Add />}>
+                        {playerAddress ? 'Editar Dirección' : 'Cargar Dirección'}
+                    </Button>
+                    {playerAddress && (
+                        <Typography variant="caption" color="text.secondary">
+                            {playerAddress.calle} {playerAddress.numero}{playerAddress.departamento ? ` Dpto: ${playerAddress.departamento}` : ''}, {playerAddress.localidad}
+                        </Typography>
+                    )}
+                </Box>
             </DialogContent>
             <DialogActions>
                 <Button onClick={onClose} color="inherit">Cancelar</Button>
@@ -657,6 +761,13 @@ function BlockCreatePlayerDialog({ division, onClose, onSuccess }) {
                     {loading ? 'Creando...' : 'Crear Jugador'}
                 </Button>
             </DialogActions>
+
+            <AddressDialog
+                open={addressOpen}
+                initialAddress={playerAddress}
+                onClose={() => setAddressOpen(false)}
+                onSave={(addr) => setPlayerAddress(addr)}
+            />
         </Dialog>
     );
 }
@@ -664,16 +775,23 @@ function BlockCreatePlayerDialog({ division, onClose, onSuccess }) {
 // ─── Block Edit User Dialog ────────────────────────────────────────
 function BlockEditUserDialog({ user, onClose, divisions, players, onSuccess }) {
     const [name, setName] = useState(user.name);
+    const [nickname, setNickname] = useState(user.nickname || '');
     const [username, setUsername] = useState(user.username);
     const [dni, setDni] = useState(user.dni || '');
     const [phone, setPhone] = useState(user.phone || '');
+    const [obraSocial, setObraSocial] = useState(user.obraSocial || '');
+    const [emergencyContactName, setEmergencyContactName] = useState(user.emergencyContactName || '');
+    const [emergencyContactPhone, setEmergencyContactPhone] = useState(user.emergencyContactPhone || '');
     const [birthDate, setBirthDate] = useState(user.birthDate ? user.birthDate.toISOString().split('T')[0] : '');
     const [selectedRoles, setSelectedRoles] = useState([...user.roles]);
     const [selectedDivisionId, setSelectedDivisionId] = useState(user.assignedDivisionId || '');
+    const [selectedManagerDivIds, setSelectedManagerDivIds] = useState(user.assignedDivisionIds?.length > 0 ? user.assignedDivisionIds : (user.assignedDivisionId ? [user.assignedDivisionId] : []));
     const [selectedCoachDivIds, setSelectedCoachDivIds] = useState([]);
     const [initialCoachDivIds, setInitialCoachDivIds] = useState([]);
     const [selectedPlayerIds, setSelectedPlayerIds] = useState([...user.assignedPlayerIds]);
     const [loading, setLoading] = useState(false);
+    const [addressOpen, setAddressOpen] = useState(false);
+    const [userAddress, setUserAddress] = useState(null);
 
     const allowedRoles = ['player', 'coach', 'manager', 'parent'];
     const activeDivisions = [...divisions].sort((a, b) => a.name.localeCompare(b.name));
@@ -688,7 +806,14 @@ function BlockEditUserDialog({ user, onClose, divisions, players, onSuccess }) {
             });
             return unsub;
         }
-    }, [user.id]);
+        if (user.addressId) {
+            getDocs(query(collection(db, 'addresses'), where('__name__', '==', user.addressId))).then(snap => {
+                if (!snap.empty) {
+                    setUserAddress(AddressModel.fromMap(snap.docs[0].data(), snap.docs[0].id));
+                }
+            });
+        }
+    }, [user.id, user.addressId, user.roles]);
 
     const toggleRole = (role) => {
         setSelectedRoles(prev => {
@@ -702,12 +827,33 @@ function BlockEditUserDialog({ user, onClose, divisions, players, onSuccess }) {
         setLoading(true);
         try {
             const nameLower = name.trim().toLowerCase();
+            const nicknameLower = nickname.trim().toLowerCase();
             const keywords = [...nameLower.split(' '), user.email.toLowerCase(), (username || user.email.split('@')[0]).toLowerCase(), dni.trim()];
+            if (nicknameLower) {
+                keywords.push(nicknameLower);
+                keywords.push(...nicknameLower.split(' '));
+            }
+
+            let addressId = user.addressId || null;
+            if (userAddress) {
+                if (addressId) {
+                    await updateDoc(doc(db, 'addresses', addressId), userAddress.toMap());
+                } else {
+                    const docRef = doc(collection(db, 'addresses'));
+                    addressId = docRef.id;
+                    userAddress.id = addressId;
+                    await setDoc(docRef, userAddress.toMap());
+                }
+            }
+
             await updateDoc(doc(db, 'users', user.id), {
-                name: name.trim(), username: username || user.email.split('@')[0], dni: dni.trim(), phone: phone.trim(),
+                name: name.trim(), nickname: nickname.trim(), username: username || user.email.split('@')[0], dni: dni.trim(), phone: phone.trim(),
+                obraSocial: obraSocial.trim(), emergencyContactName: emergencyContactName.trim(), emergencyContactPhone: emergencyContactPhone.trim(),
+                addressId,
                 birthDate: birthDate ? new Date(birthDate).toISOString() : null,
                 roles: selectedRoles, role: selectedRoles[0],
-                assignedDivisionId: selectedDivisionId || null,
+                assignedDivisionId: selectedRoles.includes('manager') ? (selectedManagerDivIds.length > 0 ? selectedManagerDivIds[0] : null) : (selectedDivisionId || null),
+                assignedDivisionIds: selectedRoles.includes('manager') ? selectedManagerDivIds : [],
                 assignedPlayerIds: selectedPlayerIds, keywords,
             });
             if (selectedRoles.includes('coach')) {
@@ -726,19 +872,35 @@ function BlockEditUserDialog({ user, onClose, divisions, players, onSuccess }) {
         <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
             <DialogTitle>Editar Usuario</DialogTitle>
             <DialogContent>
-                <TextField fullWidth label="Nombre" value={name} onChange={e => setName(e.target.value)} sx={{ mt: 1 }} />
+                <TextField fullWidth label="Nombre y Apellido *" value={name} onChange={e => setName(e.target.value)} sx={{ mt: 1 }} />
+                <TextField fullWidth label="Apodo (Opcional)" value={nickname} onChange={e => setNickname(e.target.value)} sx={{ mt: 2 }} />
                 <TextField fullWidth label="Email" value={user.email} disabled sx={{ mt: 2 }} />
                 <TextField fullWidth label="Username" value={username} onChange={e => setUsername(e.target.value)} sx={{ mt: 2 }} />
                 <TextField fullWidth label="DNI" value={dni} onChange={e => setDni(e.target.value)} sx={{ mt: 2 }} />
                 <TextField fullWidth label="Teléfono" value={phone} onChange={e => setPhone(e.target.value)} sx={{ mt: 2 }} />
+                <TextField fullWidth label="Obra Social (Opcional)" value={obraSocial} onChange={e => setObraSocial(e.target.value)} sx={{ mt: 2 }} />
+                <TextField fullWidth label="Contacto Emergencia (Nombre) (Opcional)" value={emergencyContactName} onChange={e => setEmergencyContactName(e.target.value)} sx={{ mt: 2 }} />
+                <TextField fullWidth label="Contacto Emergencia (Teléfono) (Opcional)" value={emergencyContactPhone} onChange={e => setEmergencyContactPhone(e.target.value)} sx={{ mt: 2 }} />
                 <TextField fullWidth label="Fecha de Nacimiento" type="date" value={birthDate} onChange={e => setBirthDate(e.target.value)} sx={{ mt: 2 }} InputLabelProps={{ shrink: true }} />
+
+                <Box sx={{ mt: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    <Button variant="outlined" onClick={() => setAddressOpen(true)} startIcon={<Add />}>
+                        {userAddress ? 'Editar Dirección' : 'Cargar Dirección'}
+                    </Button>
+                    {userAddress && (
+                        <Typography variant="caption" color="text.secondary">
+                            {userAddress.calle} {userAddress.numero}{userAddress.departamento ? ` Dpto: ${userAddress.departamento}` : ''}, {userAddress.localidad}
+                        </Typography>
+                    )}
+                </Box>
+
                 <Typography variant="subtitle2" sx={{ mt: 2, fontWeight: 700 }}>Roles</Typography>
                 <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 0.5 }}>
                     {allowedRoles.map(role => (
                         <Chip key={role} label={RoleLabels[role] || role} color={selectedRoles.includes(role) ? 'primary' : 'default'} variant={selectedRoles.includes(role) ? 'filled' : 'outlined'} onClick={() => toggleRole(role)} size="small" />
                     ))}
                 </Box>
-                {(selectedRoles.includes('player') || selectedRoles.includes('manager')) && (
+                {selectedRoles.includes('player') && (
                     <FormControl fullWidth sx={{ mt: 2 }}>
                         <InputLabel>Asignar División</InputLabel>
                         <Select value={selectedDivisionId} label="Asignar División" onChange={e => setSelectedDivisionId(e.target.value)}>
@@ -746,6 +908,19 @@ function BlockEditUserDialog({ user, onClose, divisions, players, onSuccess }) {
                             {activeDivisions.map(d => <MenuItem key={d.id} value={d.id}>{d.name} ({d.year})</MenuItem>)}
                         </Select>
                     </FormControl>
+                )}
+                {selectedRoles.includes('manager') && (
+                    <Box sx={{ mt: 2 }}>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Asignar Divisiones (Manager)</Typography>
+                        <Box sx={{ maxHeight: 150, overflow: 'auto', border: 1, borderColor: 'divider', borderRadius: 1, mt: 0.5 }}>
+                            {activeDivisions.map(d => (
+                                <ListItemButton key={d.id} dense onClick={() => setSelectedManagerDivIds(prev => prev.includes(d.id) ? prev.filter(x => x !== d.id) : [...prev, d.id])}>
+                                    <Checkbox checked={selectedManagerDivIds.includes(d.id)} size="small" />
+                                    <ListItemText primary={d.name} />
+                                </ListItemButton>
+                            ))}
+                        </Box>
+                    </Box>
                 )}
                 {selectedRoles.includes('coach') && (
                     <Box sx={{ mt: 2 }}>
@@ -767,17 +942,50 @@ function BlockEditUserDialog({ user, onClose, divisions, players, onSuccess }) {
                             {players.map(p => (
                                 <ListItemButton key={p.id} dense onClick={() => setSelectedPlayerIds(prev => prev.includes(p.id) ? prev.filter(x => x !== p.id) : [...prev, p.id])}>
                                     <Checkbox checked={selectedPlayerIds.includes(p.id)} size="small" />
-                                    <ListItemText primary={p.name} secondary={`DNI: ${p.dni}`} />
+                                    <ListItemText primary={p.nickname ? `"${p.nickname}" ${p.name}` : p.name} secondary={`DNI: ${p.dni}`} />
                                 </ListItemButton>
                             ))}
                         </Box>
                     </Box>
                 )}
+
+                <Divider sx={{ my: 3 }} />
+                <Box sx={{ p: 2, bgcolor: 'error.lighter', borderRadius: 2, border: 1, borderColor: 'error.light' }}>
+                    <Typography variant="subtitle2" color="error.main" fontWeight={700}>Zona de Peligro</Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
+                        Envía un enlace oficial para que el usuario pueda restablecer su contraseña de forma segura.
+                    </Typography>
+                    <Button 
+                        variant="outlined" 
+                        color="primary" 
+                        size="small" 
+                        onClick={async () => {
+                            if (window.confirm(`¿Enviar email de recuperación a ${user.email}?`)) {
+                                try {
+                                    const authObj = getAuth();
+                                    await sendPasswordResetEmail(authObj, user.email);
+                                    alert('Email de recuperación enviado con éxito.');
+                                } catch (e) {
+                                    alert('Error al enviar email: ' + e.message);
+                                }
+                            }
+                        }}
+                    >
+                        Enviar Email de Recuperación
+                    </Button>
+                </Box>
             </DialogContent>
             <DialogActions>
                 <Button onClick={onClose} color="inherit">Cancelar</Button>
                 <Button onClick={handleSave} variant="contained" disabled={loading}>{loading ? <CircularProgress size={20} /> : 'Guardar'}</Button>
             </DialogActions>
+
+            <AddressDialog
+                open={addressOpen}
+                initialAddress={userAddress}
+                onClose={() => setAddressOpen(false)}
+                onSave={(addr) => setUserAddress(addr)}
+            />
         </Dialog>
     );
 }
@@ -788,20 +996,43 @@ function BlockEditDivisionDialog({ division, onClose, onSuccess }) {
     const [year, setYear] = useState(division.year.toString());
     const [selectedCoachIds, setSelectedCoachIds] = useState([...division.coachIds]);
     const [coaches, setCoaches] = useState([]);
+    const [selectedManagerIds, setSelectedManagerIds] = useState([]);
+    const [initialManagerIds, setInitialManagerIds] = useState([]);
+    const [managers, setManagers] = useState([]);
     const [loading, setLoading] = useState(false);
 
     useEffect(() => {
-        const unsub = onSnapshot(query(collection(db, 'users'), where('roles', 'array-contains', 'coach')), snap => {
+        const unsubCoaches = onSnapshot(query(collection(db, 'users'), where('roles', 'array-contains', 'coach')), snap => {
             setCoaches(snap.docs.map(d => userModelFromMap({ ...d.data(), id: d.id })));
         });
-        return unsub;
-    }, []);
+        const unsubManagers = onSnapshot(query(collection(db, 'users'), where('roles', 'array-contains', 'manager')), snap => {
+            const mgrs = snap.docs.map(d => userModelFromMap({ ...d.data(), id: d.id }));
+            setManagers(mgrs);
+            const assignedIds = mgrs.filter(m => m.assignedDivisionId === division.id || m.assignedDivisionIds?.includes(division.id)).map(m => m.id);
+            setSelectedManagerIds(assignedIds);
+            setInitialManagerIds(assignedIds);
+        });
+        return () => { unsubCoaches(); unsubManagers(); };
+    }, [division.id]);
 
     const handleSave = async () => {
         if (!name.trim()) return;
         setLoading(true);
         try {
-            await updateDoc(doc(db, 'divisions', division.id), { name: name.trim(), coachIds: selectedCoachIds, year: parseInt(year) || division.year });
+            const batch = writeBatch(db);
+            batch.update(doc(db, 'divisions', division.id), { name: name.trim(), coachIds: selectedCoachIds, year: parseInt(year) || division.year });
+            
+            const addedMgrs = selectedManagerIds.filter(id => !initialManagerIds.includes(id));
+            const removedMgrs = initialManagerIds.filter(id => !selectedManagerIds.includes(id));
+            
+            addedMgrs.forEach(id => {
+                batch.update(doc(db, 'users', id), { assignedDivisionIds: arrayUnion(division.id) });
+            });
+            removedMgrs.forEach(id => {
+                batch.update(doc(db, 'users', id), { assignedDivisionIds: arrayRemove(division.id) });
+            });
+            
+            await batch.commit();
             onSuccess();
         } catch (e) { alert('Error: ' + e.message); } finally { setLoading(false); }
     };
@@ -822,6 +1053,16 @@ function BlockEditDivisionDialog({ division, onClose, onSuccess }) {
                     ))}
                     {coaches.length === 0 && <Typography sx={{ p: 1 }} variant="body2" color="text.secondary">No hay entrenadores</Typography>}
                 </Box>
+                <Typography variant="subtitle2" sx={{ mt: 2, fontWeight: 700 }}>Asignar Managers</Typography>
+                <Box sx={{ maxHeight: 150, overflow: 'auto', border: 1, borderColor: 'divider', borderRadius: 1, mt: 0.5 }}>
+                    {managers.map(m => (
+                        <ListItemButton key={m.id} dense onClick={() => setSelectedManagerIds(prev => prev.includes(m.id) ? prev.filter(x => x !== m.id) : [...prev, m.id])}>
+                            <Checkbox checked={selectedManagerIds.includes(m.id)} size="small" />
+                            <ListItemText primary={m.name} />
+                        </ListItemButton>
+                    ))}
+                    {managers.length === 0 && <Typography sx={{ p: 1 }} variant="body2" color="text.secondary">No hay managers</Typography>}
+                </Box>
             </DialogContent>
             <DialogActions>
                 <Button onClick={onClose} color="inherit">Cancelar</Button>
@@ -834,13 +1075,21 @@ function BlockEditDivisionDialog({ division, onClose, onSuccess }) {
 // ─── Block Edit Player Dialog ──────────────────────────────────────
 function BlockEditPlayerDialog({ player, allowedDivisionIds, onClose, onSuccess }) {
     const [name, setName] = useState(player.name);
+    const [nickname, setNickname] = useState(player.nickname || '');
     const [dni, setDni] = useState(player.dni);
+    const [obraSocial, setObraSocial] = useState(player.obraSocial || '');
+    const [emergencyContactName, setEmergencyContactName] = useState(player.emergencyContactName || '');
+    const [emergencyContactPhone, setEmergencyContactPhone] = useState(player.emergencyContactPhone || '');
     const [birthDate, setBirthDate] = useState(player.birthDate ? player.birthDate.toISOString().split('T')[0] : '');
     const [divisionId, setDivisionId] = useState(player.divisionId);
     const [divisions, setDivisions] = useState([]);
     const [clubFeePayments, setClubFeePayments] = useState({ ...player.clubFeePayments });
     const [paidYears, setPaidYears] = useState([...player.paidPlayerRightsYears]);
+    const [notes, setNotes] = useState([...(player.notes || [])]);
+    const [newNote, setNewNote] = useState('');
     const [loading, setLoading] = useState(false);
+    const [addressOpen, setAddressOpen] = useState(false);
+    const [playerAddress, setPlayerAddress] = useState(null);
 
     const currentYear = new Date().getFullYear();
     const months = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
@@ -849,17 +1098,42 @@ function BlockEditPlayerDialog({ player, allowedDivisionIds, onClose, onSuccess 
         const unsub = onSnapshot(collection(db, 'divisions'), snap => {
             setDivisions(snap.docs.map(d => divisionModelFromMap({ ...d.data(), id: d.id })).filter(d => allowedDivisionIds.includes(d.id) && !d.isHidden).sort((a, b) => a.name.localeCompare(b.name)));
         });
+        if (player.addressId) {
+            getDocs(query(collection(db, 'addresses'), where('__name__', '==', player.addressId))).then(snap => {
+                if (!snap.empty) {
+                    setPlayerAddress(AddressModel.fromMap(snap.docs[0].data(), snap.docs[0].id));
+                }
+            });
+        }
         return unsub;
-    }, [allowedDivisionIds]);
+    }, [allowedDivisionIds, player.addressId]);
+
+    const handleAddNote = () => {
+        if (!newNote.trim()) return;
+        setNotes([{ date: new Date().toISOString(), text: newNote.trim() }, ...notes]);
+        setNewNote('');
+    };
 
     const handleSave = async () => {
         if (!name.trim()) return;
         setLoading(true);
         try {
-            const data = { name: name.trim(), dni: dni.trim(), birthDate: birthDate ? new Date(birthDate).toISOString() : null, divisionId, clubFeePayments, paidPlayerRightsYears: paidYears };
+            let addressId = player.addressId || null;
+            if (playerAddress) {
+                if (addressId) {
+                    await updateDoc(doc(db, 'addresses', addressId), playerAddress.toMap());
+                } else {
+                    const docRef = doc(collection(db, 'addresses'));
+                    addressId = docRef.id;
+                    playerAddress.id = addressId;
+                    await setDoc(docRef, playerAddress.toMap());
+                }
+            }
+
+            const data = { name: name.trim(), nickname: nickname.trim(), dni: dni.trim(), obraSocial: obraSocial.trim(), emergencyContactName: emergencyContactName.trim(), emergencyContactPhone: emergencyContactPhone.trim(), birthDate: birthDate ? new Date(birthDate).toISOString() : null, divisionId, clubFeePayments, paidPlayerRightsYears: paidYears, notes, addressId };
             await updateDoc(doc(db, 'players', player.id), data);
             if (player.userId) {
-                try { await updateDoc(doc(db, 'users', player.userId), { name: name.trim(), dni: dni.trim(), birthDate: birthDate ? new Date(birthDate).toISOString() : null }); } catch (e) { console.log('Linked user update:', e); }
+                try { await updateDoc(doc(db, 'users', player.userId), { name: name.trim(), nickname: nickname.trim(), dni: dni.trim(), obraSocial: obraSocial.trim(), emergencyContactName: emergencyContactName.trim(), emergencyContactPhone: emergencyContactPhone.trim(), birthDate: birthDate ? new Date(birthDate).toISOString() : null, addressId }); } catch (e) { console.log('Linked user update:', e); }
             }
             onSuccess();
         } catch (e) { alert('Error: ' + e.message); } finally { setLoading(false); }
@@ -869,8 +1143,12 @@ function BlockEditPlayerDialog({ player, allowedDivisionIds, onClose, onSuccess 
         <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
             <DialogTitle>Editar Jugador</DialogTitle>
             <DialogContent>
-                <TextField fullWidth label="Nombre" value={name} onChange={e => setName(e.target.value)} sx={{ mt: 1 }} />
+                <TextField fullWidth label="Nombre y Apellido" value={name} onChange={e => setName(e.target.value)} sx={{ mt: 1 }} />
+                <TextField fullWidth label="Apodo (Opcional)" value={nickname} onChange={e => setNickname(e.target.value)} sx={{ mt: 2 }} />
                 <TextField fullWidth label="DNI" value={dni} onChange={e => setDni(e.target.value)} sx={{ mt: 2 }} />
+                <TextField fullWidth label="Obra Social (Opcional)" value={obraSocial} onChange={e => setObraSocial(e.target.value)} sx={{ mt: 2 }} />
+                <TextField fullWidth label="Contacto Emergencia (Nombre) (Opcional)" value={emergencyContactName} onChange={e => setEmergencyContactName(e.target.value)} sx={{ mt: 2 }} />
+                <TextField fullWidth label="Contacto Emergencia (Teléfono) (Opcional)" value={emergencyContactPhone} onChange={e => setEmergencyContactPhone(e.target.value)} sx={{ mt: 2 }} />
                 <TextField fullWidth label="Fecha de Nacimiento" type="date" value={birthDate} onChange={e => setBirthDate(e.target.value)} sx={{ mt: 2 }} InputLabelProps={{ shrink: true }} />
                 <FormControl fullWidth sx={{ mt: 2 }}>
                     <InputLabel>División</InputLabel>
@@ -878,6 +1156,18 @@ function BlockEditPlayerDialog({ player, allowedDivisionIds, onClose, onSuccess 
                         {divisions.map(d => <MenuItem key={d.id} value={d.id}>{d.name} ({d.year})</MenuItem>)}
                     </Select>
                 </FormControl>
+
+                <Box sx={{ mt: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    <Button variant="outlined" onClick={() => setAddressOpen(true)} startIcon={<Add />}>
+                        {playerAddress ? 'Editar Dirección' : 'Cargar Dirección'}
+                    </Button>
+                    {playerAddress && (
+                        <Typography variant="caption" color="text.secondary">
+                            {playerAddress.calle} {playerAddress.numero}{playerAddress.departamento ? ` Dpto: ${playerAddress.departamento}` : ''}, {playerAddress.localidad}
+                        </Typography>
+                    )}
+                </Box>
+
                 <Divider sx={{ my: 2 }} />
                 <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Cuotas del Club ({currentYear})</Typography>
                 <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 0.5 }}>
@@ -896,11 +1186,38 @@ function BlockEditPlayerDialog({ player, allowedDivisionIds, onClose, onSuccess 
                         <ListItemText primary={`Año ${y}`} />
                     </ListItemButton>
                 ))}
+                <Divider sx={{ my: 2 }} />
+                <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Notas / Observaciones</Typography>
+                <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
+                    <TextField size="small" fullWidth placeholder="Nueva nota..." value={newNote} onChange={e => setNewNote(e.target.value)} />
+                    <Button variant="contained" onClick={handleAddNote} disabled={!newNote.trim()}>Agregar</Button>
+                </Box>
+                {notes.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>No hay notas registradas.</Typography>
+                ) : (
+                    <List dense disablePadding sx={{ mb: 2 }}>
+                        {notes.map((n, i) => (
+                            <ListItem key={i} sx={{ bgcolor: 'action.hover', mb: 1, borderRadius: 1 }}>
+                                <ListItemText
+                                    primary={n.text}
+                                    secondary={new Date(n.date).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+                                />
+                            </ListItem>
+                        ))}
+                    </List>
+                )}
             </DialogContent>
             <DialogActions>
                 <Button onClick={onClose} color="inherit">Cancelar</Button>
                 <Button onClick={handleSave} variant="contained" disabled={loading}>{loading ? 'Guardando...' : 'Guardar'}</Button>
             </DialogActions>
+
+            <AddressDialog
+                open={addressOpen}
+                initialAddress={playerAddress}
+                onClose={() => setAddressOpen(false)}
+                onSave={(addr) => setPlayerAddress(addr)}
+            />
         </Dialog>
     );
 }
@@ -910,6 +1227,16 @@ function PlayerProfileDialog({ player, division, onClose }) {
     const months = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
     const payments = player.clubFeePayments || {};
     const paidYears = player.paidPlayerRightsYears || [];
+    const [address, setAddress] = useState(null);
+    const [attendanceOpen, setAttendanceOpen] = useState(false);
+
+    useEffect(() => {
+        if (player.addressId) {
+            getDoc(doc(db, 'addresses', player.addressId)).then(snap => {
+                if (snap.exists()) setAddress(snap.data());
+            }).catch(console.error);
+        }
+    }, [player.addressId]);
 
     const calcAge = (bd) => {
         if (!bd) return '-';
@@ -957,6 +1284,20 @@ function PlayerProfileDialog({ player, division, onClose }) {
                         <Typography variant="caption" color="text.secondary">Fecha de Nacimiento</Typography>
                         <Typography variant="body2" fontWeight={500}>{formatDate(player.birthDate)} ({calcAge(player.birthDate)} años)</Typography>
                     </Box>
+                    <Box>
+                        <Typography variant="caption" color="text.secondary">Obra Social</Typography>
+                        <Typography variant="body2" fontWeight={500}>{player.obraSocial || '-'}</Typography>
+                    </Box>
+                    <Box>
+                        <Typography variant="caption" color="text.secondary">Contacto de Emergencia</Typography>
+                        <Typography variant="body2" fontWeight={500}>{player.emergencyContactName ? `${player.emergencyContactName} (${player.emergencyContactPhone || '-'})` : '-'}</Typography>
+                    </Box>
+                    <Box sx={{ gridColumn: '1 / -1' }}>
+                        <Typography variant="caption" color="text.secondary">Dirección</Typography>
+                        <Typography variant="body2" fontWeight={500}>
+                            {address ? `${address.calle} ${address.numero}${address.departamento ? ` Dpto: ${address.departamento}` : ''}, ${address.localidad}` : '-'}
+                        </Typography>
+                    </Box>
                 </Box>
 
                 <Divider sx={{ my: 2 }} />
@@ -996,10 +1337,31 @@ function PlayerProfileDialog({ player, division, onClose }) {
                         />
                     ))}
                 </Box>
+
+                <Divider sx={{ my: 2 }} />
+
+                {/* Notes / Observations */}
+                <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Notas / Observaciones</Typography>
+                {(!player.notes || player.notes.length === 0) ? (
+                    <Typography variant="body2" color="text.secondary">No hay notas registradas.</Typography>
+                ) : (
+                    <List dense disablePadding>
+                        {player.notes.map((n, i) => (
+                            <ListItem key={i} sx={{ bgcolor: 'action.hover', mb: 1, borderRadius: 1 }}>
+                                <ListItemText
+                                    primary={n.text}
+                                    secondary={new Date(n.date).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+                                />
+                            </ListItem>
+                        ))}
+                    </List>
+                )}
             </DialogContent>
             <DialogActions>
+                <Button onClick={() => setAttendanceOpen(true)} variant="contained" color="primary">Ver Asistencias</Button>
                 <Button onClick={onClose} variant="outlined">Cerrar</Button>
             </DialogActions>
+            {attendanceOpen && <PlayerAttendanceDialog open={attendanceOpen} player={player} onClose={() => setAttendanceOpen(false)} />}
         </Dialog>
     );
 }

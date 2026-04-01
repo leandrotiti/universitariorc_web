@@ -18,6 +18,7 @@ export function playerModelFromMap(map) {
     return {
         id: map.id || '',
         name: map.name || '',
+        nickname: map.nickname || '',
         dni: map.dni || '',
         birthDate,
         phone: map.phone || '',
@@ -27,6 +28,11 @@ export function playerModelFromMap(map) {
         userId: map.userId || null,
         clubFeePayments: map.clubFeePayments || {},
         paidPlayerRightsYears,
+        notes: Array.isArray(map.notes) ? map.notes : [],
+        obraSocial: map.obraSocial || '',
+        emergencyContactName: map.emergencyContactName || '',
+        emergencyContactPhone: map.emergencyContactPhone || '',
+        addressId: map.addressId || null,
     };
 }
 
@@ -34,6 +40,7 @@ export function playerModelToMap(player) {
     return {
         id: player.id,
         name: player.name,
+        nickname: player.nickname || '',
         dni: player.dni,
         birthDate: player.birthDate.toISOString(),
         phone: player.phone,
@@ -43,5 +50,10 @@ export function playerModelToMap(player) {
         userId: player.userId,
         clubFeePayments: player.clubFeePayments,
         paidPlayerRightsYears: player.paidPlayerRightsYears,
+        notes: player.notes || [],
+        obraSocial: player.obraSocial,
+        emergencyContactName: player.emergencyContactName,
+        emergencyContactPhone: player.emergencyContactPhone,
+        addressId: player.addressId,
     };
 }

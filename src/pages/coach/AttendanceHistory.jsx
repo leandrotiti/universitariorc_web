@@ -1,8 +1,8 @@
-import { useState, useEffect, useMemo } from 'react';
+﻿import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useParams, useNavigate } from 'react-router-dom';
 import { db } from '../../config/firebase';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, updateDoc, arrayUnion, getDoc } from 'firebase/firestore';
 import { divisionModelFromMap } from '../../models/DivisionModel';
 import { playerModelFromMap } from '../../models/PlayerModel';
 import {
@@ -13,7 +13,7 @@ import {
 } from '@mui/material';
 import {
     CheckCircle as PresentIcon, Cancel as AbsentIcon, AccessTime as LateIcon,
-    ExpandMore, ArrowBack, Notes as NotesIcon, FilterAltOff, Edit as EditIcon
+    ExpandMore, ArrowBack, Notes as NotesIcon, FilterAltOff, Edit as EditIcon, Delete as DeleteIcon
 } from '@mui/icons-material';
 
 export default function AttendanceHistory({ allowedDivisionIds }) {
@@ -45,8 +45,15 @@ export default function AttendanceHistory({ allowedDivisionIds }) {
                     divs = [];
                 }
             } else if (activeRole === 'manager') {
-                if (userModel?.assignedDivisionId) {
-                    divs = divs.filter(d => d.id === userModel.assignedDivisionId);
+                const mgrDivIds = [];
+                if (userModel?.assignedDivisionIds?.length > 0) {
+                    mgrDivIds.push(...userModel.assignedDivisionIds);
+                } else if (userModel?.assignedDivisionId) {
+                    mgrDivIds.push(userModel.assignedDivisionId);
+                }
+
+                if (mgrDivIds.length > 0) {
+                    divs = divs.filter(d => mgrDivIds.includes(d.id));
                 } else {
                     divs = [];
                 }
@@ -139,6 +146,49 @@ export default function AttendanceHistory({ allowedDivisionIds }) {
         setDateTo('');
     };
 
+    const handleAddObservation = async (recordId, text) => {
+        if (!text.trim()) return;
+        try {
+            await updateDoc(doc(db, 'attendance', recordId), {
+                observations: arrayUnion({
+                    text: text.trim(),
+                    date: new Date().toISOString(),
+                    authorName: userModel?.name || 'Usuario'
+                })
+            });
+        } catch (e) {
+            console.error("Error adding observation:", e);
+        }
+    };
+
+
+    const handleEditObservation = async (recordId, originalObs, newText) => {
+        if (!newText.trim()) return;
+        try {
+            const d = await getDoc(doc(db, 'attendance', recordId));
+            if (d.exists()) {
+                const arr = d.data().observations || [];
+                const newArr = arr.map(o => o.date === originalObs.date ? { ...o, text: newText.trim() } : o);
+                await updateDoc(doc(db, 'attendance', recordId), { observations: newArr });
+            }
+        } catch (e) {
+            console.error("Error editing observation:", e);
+        }
+    };
+
+    const handleDeleteObservation = async (recordId, obsToDelete) => {
+        try {
+            const d = await getDoc(doc(db, 'attendance', recordId));
+            if (d.exists()) {
+                const arr = d.data().observations || [];
+                const newArr = arr.filter(o => o.date !== obsToDelete.date);
+                await updateDoc(doc(db, 'attendance', recordId), { observations: newArr });
+            }
+        } catch (e) {
+            console.error("Error deleting observation:", e);
+        }
+    };
+
     return (
         <Fade in timeout={400}>
             <Box>
@@ -211,15 +261,13 @@ export default function AttendanceHistory({ allowedDivisionIds }) {
                                     color="warning.main" icon={<LateIcon sx={{ color: 'warning.main' }} fontSize="small" />} />
                                 <PlayerStatusGroup title="Ausentes" playerIds={record.absentPlayerIds || []} playersMap={playersMap}
                                     color="error.main" icon={<AbsentIcon sx={{ color: 'error.main' }} fontSize="small" />} />
-                                {record.notes && (
-                                    <Box sx={{ mt: 1, p: 1.5, borderRadius: 1.5, backgroundColor: '#e3f2fd', border: '1px solid #90caf9' }}>
-                                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
-                                            <NotesIcon sx={{ fontSize: 14, color: '#1565c0' }} />
-                                            <Typography variant="caption" fontWeight={700} sx={{ color: '#1565c0' }}>Observaciones</Typography>
-                                        </Box>
-                                        <Typography variant="body2" sx={{ fontSize: '0.8rem', wordBreak: 'break-word' }}>{record.notes}</Typography>
-                                    </Box>
-                                )}
+                                <AttendanceObservationsManager
+                                    record={record}
+                                    activeRole={activeRole}
+                                    onAdd={handleAddObservation}
+onEdit={handleEditObservation}
+onDelete={handleDeleteObservation}
+                                />
                                 {activeRole === 'coach' && (
                                     <Box sx={{ mt: 1.5, display: 'flex', justifyContent: 'flex-end' }}>
                                         <Button
@@ -264,6 +312,90 @@ function PlayerStatusGroup({ title, playerIds, playersMap, color, icon }) {
                 </Box>
             ))}
             <Divider sx={{ mt: 0.5 }} />
+        </Box>
+    );
+}
+
+export function AttendanceObservationsManager({ record, activeRole, onAdd, onEdit, onDelete }) {
+    const [newText, setNewText] = useState('');
+    const [editingObs, setEditingObs] = useState(null);
+    const [editText, setEditText] = useState('');
+    const observations = record.observations || [];
+    const legacyNotes = record.notes;
+
+    if (observations.length === 0 && !legacyNotes && activeRole !== 'coach' && activeRole !== 'block_admin' && activeRole !== 'admin' && activeRole !== 'manager') {
+        return null;
+    }
+
+    const canEdit = activeRole === 'coach' || activeRole === 'block_admin' || activeRole === 'admin' || activeRole === 'manager';
+
+    return (
+        <Box sx={{ mt: 1, p: 1.5, borderRadius: 1.5, backgroundColor: '#e3f2fd', border: '1px solid #90caf9' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
+                <NotesIcon sx={{ fontSize: 16, color: '#1565c0' }} />
+                <Typography variant="subtitle2" fontWeight={700} sx={{ color: '#1565c0' }}>
+                    Observaciones ({observations.length + (legacyNotes ? 1 : 0)})
+                </Typography>
+            </Box>
+
+            {legacyNotes && (
+                <Box sx={{ mb: 1, p: 1, bgcolor: 'background.paper', borderRadius: 1 }}>
+                    <Typography variant="caption" color="text.secondary" fontWeight={700} display="block">Nota heredada</Typography>
+                    <Typography variant="body2" sx={{ fontSize: '0.8rem', whiteSpace: 'pre-wrap' }}>{legacyNotes}</Typography>
+                </Box>
+            )}
+
+            {observations.length > 0 && (
+                <List dense disablePadding sx={{ mb: 1 }}>
+                    {[...observations].sort((a, b) => new Date(b.date) - new Date(a.date)).map((obs, i) => (
+                        <ListItem key={i} sx={{ bgcolor: 'background.paper', mb: 0.5, borderRadius: 1, alignItems: 'flex-start', p: 1, display: 'flex', flexDirection: 'column' }}>
+                            {editingObs === obs ? (
+                                <Box sx={{ width: '100%' }}>
+                                    <TextField
+                                        fullWidth size="small" multiline rows={2}
+                                        value={editText} onChange={e => setEditText(e.target.value)}
+                                        sx={{ bgcolor: '#fff', mb: 1 }}
+                                    />
+                                    <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+                                        <Button size="small" color="inherit" onClick={() => setEditingObs(null)}>Cancelar</Button>
+                                        <Button size="small" variant="contained" onClick={() => { onEdit(record.id, obs, editText); setEditingObs(null); }}>Guardar</Button>
+                                    </Box>
+                                </Box>
+                            ) : (
+                                <Box sx={{ width: '100%', display: 'flex', justifyContent: 'space-between' }}>
+                                    <Box>
+                                        <Typography variant="body2" sx={{ fontSize: '0.82rem', whiteSpace: 'pre-wrap' }}>{obs.text}</Typography>
+                                        <Typography variant="caption" color="text.secondary">
+                                            {obs.authorName} - {new Date(obs.date).toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' })}
+                                        </Typography>
+                                    </Box>
+                                    {canEdit && (
+                                        <Box sx={{ display: 'flex', gap: 0.5 }}>
+                                            <IconButton size="small" onClick={() => { setEditingObs(obs); setEditText(obs.text); }}><EditIcon sx={{ fontSize: 16 }} /></IconButton>
+                                            <IconButton size="small" color="error" onClick={() => { if(confirm('¿Eliminar observación?')) onDelete(record.id, obs); }}><DeleteIcon sx={{ fontSize: 16 }} /></IconButton>
+                                        </Box>
+                                    )}
+                                </Box>
+                            )}
+                        </ListItem>
+                    ))}
+                </List>
+            )}
+
+            {canEdit && (
+                <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
+                    <TextField
+                        size="small" fullWidth placeholder="Nueva observación..."
+                        value={newText} onChange={e => setNewText(e.target.value)}
+                        sx={{ bgcolor: 'background.paper', borderRadius: 1 }}
+                    />
+                    <Button
+                        variant="contained" color="primary" size="small"
+                        onClick={() => { onAdd(record.id, newText); setNewText(''); }}
+                        disabled={!newText.trim()} sx={{ minWidth: 80 }}
+                    >Agregar</Button>
+                </Box>
+            )}
         </Box>
     );
 }

@@ -43,6 +43,7 @@ export function userModelFromMap(map) {
         id: map.id || '',
         email: map.email || '',
         name: map.name || '',
+        nickname: map.nickname || '',
         username: map.username || '',
         dni: map.dni || null,
         phone: map.phone || null,
@@ -51,10 +52,17 @@ export function userModelFromMap(map) {
         assignedPlayerIds: map.assignedPlayerIds || [],
         birthDate: map.birthDate ? new Date(map.birthDate) : null,
         assignedDivisionId: map.assignedDivisionId || null,
+        assignedDivisionIds: Array.isArray(map.assignedDivisionIds)
+            ? map.assignedDivisionIds
+            : (map.assignedDivisionId ? [map.assignedDivisionId] : []),
         mustChangePassword: map.mustChangePassword || false,
         avatarId: map.avatarId || null,
         assignedBlockId: map.assignedBlockId || null,
         keywords: map.keywords || [],
+        obraSocial: map.obraSocial || '',
+        emergencyContactName: map.emergencyContactName || '',
+        emergencyContactPhone: map.emergencyContactPhone || '',
+        addressId: map.addressId || null,
     };
 }
 
@@ -63,6 +71,7 @@ export function userModelToMap(user) {
         id: user.id,
         email: user.email,
         name: user.name,
+        nickname: user.nickname || '',
         username: user.username,
         dni: user.dni,
         phone: user.phone,
@@ -71,10 +80,15 @@ export function userModelToMap(user) {
         assignedPlayerIds: user.assignedPlayerIds,
         birthDate: user.birthDate ? user.birthDate.toISOString() : null,
         assignedDivisionId: user.assignedDivisionId,
+        assignedDivisionIds: user.assignedDivisionIds || [],
         mustChangePassword: user.mustChangePassword,
         avatarId: user.avatarId,
         assignedBlockId: user.assignedBlockId,
         keywords: user.keywords,
+        obraSocial: user.obraSocial,
+        emergencyContactName: user.emergencyContactName,
+        emergencyContactPhone: user.emergencyContactPhone,
+        addressId: user.addressId,
     };
 }
 
@@ -84,4 +98,13 @@ export function getPrimaryRole(user) {
 
 export function getRoleLabel(user) {
     return user.roles.map((r) => RoleLabels[r] || '').join(', ');
+}
+
+export function getDisplayName(entity) {
+    if (!entity) return '';
+    const name = entity.name || '';
+    if (entity.nickname && entity.nickname.trim() !== '') {
+        return `${name} (${entity.nickname.trim()})`;
+    }
+    return name;
 }

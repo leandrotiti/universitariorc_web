@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+﻿import { useState, useEffect } from 'react';
 import {
     Box, Card, Typography, IconButton, Button, TextField, Dialog, DialogTitle, DialogContent,
     DialogActions, Accordion, AccordionSummary, AccordionDetails, List, ListItem, ListItemAvatar,
@@ -14,7 +14,10 @@ import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
 import { collection, query, where, onSnapshot, doc, updateDoc, deleteDoc, getDocs, writeBatch, setDoc, arrayRemove } from 'firebase/firestore';
 import { divisionModelFromMap } from '../../models/DivisionModel';
 import { playerModelFromMap } from '../../models/PlayerModel';
-import { userModelFromMap, RoleLabels } from '../../models/UserModel';
+import { userModelFromMap, RoleLabels, getDisplayName } from '../../models/UserModel';
+import { AddressModel } from '../../models/AddressModel';
+import AddressDialog from '../../components/shared/AddressDialog';
+import PlayerAttendanceDialog from '../../components/shared/PlayerAttendanceDialog';
 
 function naturalSort(a, b) {
     const re = /(\d+)/g;
@@ -283,7 +286,7 @@ function DivisionPlayerList({ division, onEditPlayer, onCreatePlayer, snack }) {
                 <Box key={p.id} sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.5, px: 1 }}>
                     <Avatar sx={{ width: 28, height: 28, fontSize: 12 }}>{p.name?.[0]?.toUpperCase()}</Avatar>
                     <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Typography sx={{ fontSize: 14, fontWeight: 500 }} noWrap>{p.name}</Typography>
+                        <Typography sx={{ fontSize: 14, fontWeight: 500 }} noWrap>{p.nickname ? `"${p.nickname}" ${p.name}` : p.name}</Typography>
                         <Typography sx={{ fontSize: 12, color: 'text.secondary' }} noWrap>DNI: {p.dni || '-'}</Typography>
                     </Box>
                     <Tooltip title="Ver Perfil"><IconButton size="small" color="info" onClick={(e) => { e.stopPropagation(); setViewPlayer(p); }}><Visibility fontSize="small" /></IconButton></Tooltip>
@@ -451,13 +454,21 @@ function EditDivisionDialog({ division, onClose, onSuccess }) {
 
 function EditPlayerDialog({ player, onClose, onSuccess }) {
     const [name, setName] = useState(player.name);
-    const [dni, setDni] = useState(player.dni);
+    const [nickname, setNickname] = useState(player.nickname || '');
+    const [dni, setDni] = useState(player.dni || '');
+    const [obraSocial, setObraSocial] = useState(player.obraSocial || '');
+    const [emergencyContactName, setEmergencyContactName] = useState(player.emergencyContactName || '');
+    const [emergencyContactPhone, setEmergencyContactPhone] = useState(player.emergencyContactPhone || '');
     const [birthDate, setBirthDate] = useState(player.birthDate ? player.birthDate.toISOString().split('T')[0] : '');
     const [divisionId, setDivisionId] = useState(player.divisionId);
     const [divisions, setDivisions] = useState([]);
     const [clubFeePayments, setClubFeePayments] = useState({ ...player.clubFeePayments });
     const [paidYears, setPaidYears] = useState([...player.paidPlayerRightsYears]);
+    const [notes, setNotes] = useState([...(player.notes || [])]);
+    const [newNote, setNewNote] = useState('');
     const [loading, setLoading] = useState(false);
+    const [addressOpen, setAddressOpen] = useState(false);
+    const [playerAddress, setPlayerAddress] = useState(null);
 
     const currentYear = new Date().getFullYear();
     const months = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
@@ -466,17 +477,42 @@ function EditPlayerDialog({ player, onClose, onSuccess }) {
         const unsub = onSnapshot(collection(db, 'divisions'), snap => {
             setDivisions(snap.docs.map(d => divisionModelFromMap({ ...d.data(), id: d.id })).filter(d => !d.isHidden).sort((a, b) => b.year - a.year));
         });
+        if (player.addressId) {
+            getDocs(query(collection(db, 'addresses'), where('__name__', '==', player.addressId))).then(snap => {
+                if (!snap.empty) {
+                    setPlayerAddress(AddressModel.fromMap(snap.docs[0].data(), snap.docs[0].id));
+                }
+            });
+        }
         return unsub;
     }, []);
+
+    const handleAddNote = () => {
+        if (!newNote.trim()) return;
+        setNotes([{ date: new Date().toISOString(), text: newNote.trim() }, ...notes]);
+        setNewNote('');
+    };
 
     const handleSave = async () => {
         if (!name.trim()) return;
         setLoading(true);
         try {
-            const data = { name: name.trim(), dni: dni.trim(), birthDate: new Date(birthDate).toISOString(), divisionId, clubFeePayments, paidPlayerRightsYears: paidYears };
+            let addressId = player.addressId || null;
+            if (playerAddress) {
+                if (addressId) {
+                    await updateDoc(doc(db, 'addresses', addressId), playerAddress.toMap());
+                } else {
+                    const docRef = doc(collection(db, 'addresses'));
+                    addressId = docRef.id;
+                    playerAddress.id = addressId;
+                    await setDoc(docRef, playerAddress.toMap());
+                }
+            }
+
+            const data = { name: name.trim(), nickname: nickname.trim(), dni: dni.trim(), obraSocial: obraSocial.trim(), emergencyContactName: emergencyContactName.trim(), emergencyContactPhone: emergencyContactPhone.trim(), birthDate: birthDate ? new Date(birthDate).toISOString() : null, divisionId, clubFeePayments, paidPlayerRightsYears: paidYears, notes, addressId };
             await updateDoc(doc(db, 'players', player.id), data);
             if (player.userId) {
-                try { await updateDoc(doc(db, 'users', player.userId), { name: name.trim(), dni: dni.trim(), birthDate: new Date(birthDate).toISOString() }); } catch (e) { console.log('Linked user update:', e); }
+                try { await updateDoc(doc(db, 'users', player.userId), { name: name.trim(), nickname: nickname.trim(), dni: dni.trim(), obraSocial: obraSocial.trim(), emergencyContactName: emergencyContactName.trim(), emergencyContactPhone: emergencyContactPhone.trim(), birthDate: birthDate ? new Date(birthDate).toISOString() : null, addressId }); } catch (e) { console.log('Linked user update:', e); }
             }
             onSuccess();
         } catch (e) { alert('Error: ' + e.message); } finally { setLoading(false); }
@@ -486,8 +522,12 @@ function EditPlayerDialog({ player, onClose, onSuccess }) {
         <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
             <DialogTitle>Editar Jugador</DialogTitle>
             <DialogContent>
-                <TextField fullWidth label="Nombre" value={name} onChange={e => setName(e.target.value)} sx={{ mt: 1 }} />
+                <TextField fullWidth label="Nombre y Apellido" value={name} onChange={e => setName(e.target.value)} sx={{ mt: 1 }} />
+                <TextField fullWidth label="Apodo (Opcional)" value={nickname} onChange={e => setNickname(e.target.value)} sx={{ mt: 2 }} />
                 <TextField fullWidth label="DNI" value={dni} onChange={e => setDni(e.target.value)} sx={{ mt: 2 }} />
+                <TextField fullWidth label="Obra Social (Opcional)" value={obraSocial} onChange={e => setObraSocial(e.target.value)} sx={{ mt: 2 }} />
+                <TextField fullWidth label="Contacto Emergencia (Nombre) (Opcional)" value={emergencyContactName} onChange={e => setEmergencyContactName(e.target.value)} sx={{ mt: 2 }} />
+                <TextField fullWidth label="Contacto Emergencia (Teléfono) (Opcional)" value={emergencyContactPhone} onChange={e => setEmergencyContactPhone(e.target.value)} sx={{ mt: 2 }} />
                 <TextField fullWidth label="Fecha de Nacimiento" type="date" value={birthDate} onChange={e => setBirthDate(e.target.value)} sx={{ mt: 2 }} InputLabelProps={{ shrink: true }} />
                 <FormControl fullWidth sx={{ mt: 2 }}>
                     <InputLabel>División</InputLabel>
@@ -495,6 +535,17 @@ function EditPlayerDialog({ player, onClose, onSuccess }) {
                         {divisions.map(d => <MenuItem key={d.id} value={d.id}>{d.name} ({d.year})</MenuItem>)}
                     </Select>
                 </FormControl>
+
+                <Box sx={{ mt: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    <Button variant="outlined" onClick={() => setAddressOpen(true)} startIcon={<Add />}>
+                        {playerAddress ? 'Editar Dirección' : 'Cargar Dirección'}
+                    </Button>
+                    {playerAddress && (
+                        <Typography variant="caption" color="text.secondary">
+                            {playerAddress.calle} {playerAddress.numero}{playerAddress.departamento ? ` Dpto: ${playerAddress.departamento}` : ''}, {playerAddress.localidad}
+                        </Typography>
+                    )}
+                </Box>
                 <Divider sx={{ my: 2 }} />
                 <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Cuotas del Club ({currentYear})</Typography>
                 <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 0.5 }}>
@@ -513,6 +564,26 @@ function EditPlayerDialog({ player, onClose, onSuccess }) {
                         <ListItemText primary={`Año ${y}`} />
                     </ListItemButton>
                 ))}
+                <Divider sx={{ my: 2 }} />
+                <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Notas / Observaciones</Typography>
+                <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
+                    <TextField size="small" fullWidth placeholder="Nueva nota..." value={newNote} onChange={e => setNewNote(e.target.value)} />
+                    <Button variant="contained" onClick={handleAddNote} disabled={!newNote.trim()}>Agregar</Button>
+                </Box>
+                {notes.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>No hay notas registradas.</Typography>
+                ) : (
+                    <List dense disablePadding sx={{ mb: 2 }}>
+                        {notes.map((n, i) => (
+                            <ListItem key={i} sx={{ bgcolor: 'action.hover', mb: 1, borderRadius: 1 }}>
+                                <ListItemText
+                                    primary={n.text}
+                                    secondary={new Date(n.date).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+                                />
+                            </ListItem>
+                        ))}
+                    </List>
+                )}
             </DialogContent>
             <DialogActions>
                 <Button onClick={onClose} color="inherit">Cancelar</Button>
@@ -524,12 +595,18 @@ function EditPlayerDialog({ player, onClose, onSuccess }) {
 
 function CreatePlayerDialog({ division, onClose, onSuccess }) {
     const [name, setName] = useState('');
+    const [nickname, setNickname] = useState('');
     const [email, setEmail] = useState('');
     const [dni, setDni] = useState('');
     const [phone, setPhone] = useState('');
+    const [obraSocial, setObraSocial] = useState('');
+    const [emergencyContactName, setEmergencyContactName] = useState('');
+    const [emergencyContactPhone, setEmergencyContactPhone] = useState('');
     const [birthDate, setBirthDate] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
+    const [addressOpen, setAddressOpen] = useState(false);
+    const [playerAddress, setPlayerAddress] = useState(null);
 
     const handleCreate = async () => {
         if (!name.trim()) { setError('El nombre es obligatorio.'); return; }
@@ -553,16 +630,34 @@ function CreatePlayerDialog({ division, onClose, onSuccess }) {
 
             const username = email.trim().split('@')[0];
             const nameLower = name.trim().toLowerCase();
+            const nicknameLower = nickname.trim().toLowerCase();
             const keywords = [nameLower, ...nameLower.split(' '), email.trim().toLowerCase(), dni.trim()];
+            if (nicknameLower) {
+                keywords.push(nicknameLower);
+                keywords.push(...nicknameLower.split(' '));
+            }
+
+            let addressId = null;
+            if (playerAddress) {
+                const docRef = doc(collection(db, 'addresses'));
+                addressId = docRef.id;
+                playerAddress.id = addressId;
+                await setDoc(docRef, playerAddress.toMap());
+            }
 
             // Create user document with player role
             await setDoc(doc(db, 'users', userId), {
                 id: userId,
                 email: email.trim(),
                 name: name.trim(),
+                nickname: nickname.trim(),
                 username,
                 dni: dni.trim(),
                 phone: phone.trim(),
+                obraSocial: obraSocial.trim(),
+                emergencyContactName: emergencyContactName.trim(),
+                emergencyContactPhone: emergencyContactPhone.trim(),
+                addressId,
                 birthDate: birthDate ? new Date(birthDate).toISOString() : null,
                 roles: ['player'],
                 role: 'player',
@@ -579,9 +674,14 @@ function CreatePlayerDialog({ division, onClose, onSuccess }) {
                 id: playerRef.id,
                 userId: userId,
                 name: name.trim(),
+                nickname: nickname.trim(),
                 email: email.trim(),
                 dni: dni.trim(),
                 phone: phone.trim(),
+                obraSocial: obraSocial.trim(),
+                emergencyContactName: emergencyContactName.trim(),
+                emergencyContactPhone: emergencyContactPhone.trim(),
+                addressId,
                 birthDate: birthDate ? new Date(birthDate).toISOString() : null,
                 divisionId: division.id,
                 clubFeePayments: {},
@@ -604,13 +704,28 @@ function CreatePlayerDialog({ division, onClose, onSuccess }) {
             <DialogTitle>Agregar Jugador a {division.name}</DialogTitle>
             <DialogContent>
                 {error && <Alert severity="error" sx={{ mt: 1, mb: 1 }}>{error}</Alert>}
-                <TextField fullWidth label="Nombre completo" value={name} onChange={e => setName(e.target.value)} sx={{ mt: 1 }} autoFocus />
+                <TextField fullWidth label="Nombre y Apellido" value={name} onChange={e => setName(e.target.value)} sx={{ mt: 1 }} autoFocus />
+                <TextField fullWidth label="Apodo (Opcional)" value={nickname} onChange={e => setNickname(e.target.value)} sx={{ mt: 2 }} />
                 <TextField fullWidth label="Email" type="email" value={email} onChange={e => setEmail(e.target.value)} sx={{ mt: 2 }}
                     helperText="El nombre de usuario se generará automáticamente del email" />
                 <TextField fullWidth label="DNI (se usa como contraseña inicial)" value={dni} onChange={e => setDni(e.target.value)} sx={{ mt: 2 }} />
                 <TextField fullWidth label="Teléfono" value={phone} onChange={e => setPhone(e.target.value)} sx={{ mt: 2 }} />
+                <TextField fullWidth label="Obra Social (Opcional)" value={obraSocial} onChange={e => setObraSocial(e.target.value)} sx={{ mt: 2 }} />
+                <TextField fullWidth label="Contacto Emergencia (Nombre) (Opcional)" value={emergencyContactName} onChange={e => setEmergencyContactName(e.target.value)} sx={{ mt: 2 }} />
+                <TextField fullWidth label="Contacto Emergencia (Teléfono) (Opcional)" value={emergencyContactPhone} onChange={e => setEmergencyContactPhone(e.target.value)} sx={{ mt: 2 }} />
                 <TextField fullWidth label="Fecha de Nacimiento" type="date" value={birthDate} onChange={e => setBirthDate(e.target.value)}
                     sx={{ mt: 2 }} InputLabelProps={{ shrink: true }} />
+
+                <Box sx={{ mt: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    <Button variant="outlined" onClick={() => setAddressOpen(true)} startIcon={<Add />}>
+                        {playerAddress ? 'Editar Dirección' : 'Cargar Dirección'}
+                    </Button>
+                    {playerAddress && (
+                        <Typography variant="caption" color="text.secondary">
+                            {playerAddress.calle} {playerAddress.numero}{playerAddress.departamento ? ` Dpto: ${playerAddress.departamento}` : ''}, {playerAddress.localidad}
+                        </Typography>
+                    )}
+                </Box>
             </DialogContent>
             <DialogActions>
                 <Button onClick={onClose} color="inherit">Cancelar</Button>
@@ -619,6 +734,13 @@ function CreatePlayerDialog({ division, onClose, onSuccess }) {
                     {loading ? 'Creando...' : 'Crear Jugador'}
                 </Button>
             </DialogActions>
+
+            <AddressDialog
+                open={addressOpen}
+                initialAddress={playerAddress}
+                onClose={() => setAddressOpen(false)}
+                onSave={(addr) => setPlayerAddress(addr)}
+            />
         </Dialog>
     );
 }
@@ -629,6 +751,16 @@ function AdminPlayerProfileDialog({ player, division, onClose }) {
     const months = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
     const payments = player.clubFeePayments || {};
     const paidYears = player.paidPlayerRightsYears || [];
+    const [address, setAddress] = useState(null);
+    const [attendanceOpen, setAttendanceOpen] = useState(false);
+
+    useEffect(() => {
+        if (player.addressId) {
+            getDoc(doc(db, 'addresses', player.addressId)).then(snap => {
+                if (snap.exists()) setAddress(snap.data());
+            }).catch(console.error);
+        }
+    }, [player.addressId]);
 
     const calcAge = (bd) => {
         if (!bd) return '-';
@@ -674,6 +806,20 @@ function AdminPlayerProfileDialog({ player, division, onClose }) {
                         <Typography variant="caption" color="text.secondary">Fecha de Nacimiento</Typography>
                         <Typography variant="body2" fontWeight={500}>{formatDate(player.birthDate)} ({calcAge(player.birthDate)} años)</Typography>
                     </Box>
+                    <Box>
+                        <Typography variant="caption" color="text.secondary">Obra Social</Typography>
+                        <Typography variant="body2" fontWeight={500}>{player.obraSocial || '-'}</Typography>
+                    </Box>
+                    <Box>
+                        <Typography variant="caption" color="text.secondary">Contacto de Emergencia</Typography>
+                        <Typography variant="body2" fontWeight={500}>{player.emergencyContactName ? `${player.emergencyContactName} (${player.emergencyContactPhone || '-'})` : '-'}</Typography>
+                    </Box>
+                    <Box sx={{ gridColumn: '1 / -1' }}>
+                        <Typography variant="caption" color="text.secondary">Dirección</Typography>
+                        <Typography variant="body2" fontWeight={500}>
+                            {address ? `${address.calle} ${address.numero}${address.departamento ? ` Dpto: ${address.departamento}` : ''}, ${address.localidad}` : '-'}
+                        </Typography>
+                    </Box>
                 </Box>
                 <Divider sx={{ my: 2 }} />
                 <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Cuotas del Club — {currentYear}</Typography>
@@ -703,8 +849,10 @@ function AdminPlayerProfileDialog({ player, division, onClose }) {
                 </Box>
             </DialogContent>
             <DialogActions>
+                <Button onClick={() => setAttendanceOpen(true)} variant="contained" color="primary">Ver Asistencias</Button>
                 <Button onClick={onClose} variant="outlined">Cerrar</Button>
             </DialogActions>
+            {attendanceOpen && <PlayerAttendanceDialog open={attendanceOpen} player={player} onClose={() => setAttendanceOpen(false)} />}
         </Dialog>
     );
 }

@@ -84,23 +84,34 @@ export default function CoachPlayerManagement() {
 
 function EditPlayerDialog({ player, onClose, onSuccess }) {
     const [name, setName] = useState(player.name);
-    const [dni, setDni] = useState(player.dni);
+    const [dni, setDni] = useState(player.dni || '');
     const [phone, setPhone] = useState(player.phone || '');
+    const [obraSocial, setObraSocial] = useState(player.obraSocial || '');
+    const [emergencyContactName, setEmergencyContactName] = useState(player.emergencyContactName || '');
+    const [emergencyContactPhone, setEmergencyContactPhone] = useState(player.emergencyContactPhone || '');
     const [birthDate, setBirthDate] = useState(player.birthDate ? player.birthDate.toISOString().split('T')[0] : '');
     const [clubFeePayments, setClubFeePayments] = useState({ ...player.clubFeePayments });
     const [paidYears, setPaidYears] = useState([...player.paidPlayerRightsYears]);
+    const [notes, setNotes] = useState([...(player.notes || [])]);
+    const [newNote, setNewNote] = useState('');
     const [loading, setLoading] = useState(false);
 
     const currentYear = new Date().getFullYear();
     const months = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
 
+    const handleAddNote = () => {
+        if (!newNote.trim()) return;
+        setNotes([{ date: new Date().toISOString(), text: newNote.trim() }, ...notes]);
+        setNewNote('');
+    };
+
     const handleSave = async () => {
         if (!name.trim()) return;
         setLoading(true);
         try {
-            await updateDoc(doc(db, 'players', player.id), { name: name.trim(), dni: dni.trim(), phone: phone.trim(), birthDate: birthDate ? new Date(birthDate).toISOString() : player.birthDate?.toISOString(), clubFeePayments, paidPlayerRightsYears: paidYears });
+            await updateDoc(doc(db, 'players', player.id), { name: name.trim(), dni: dni.trim(), phone: phone.trim(), obraSocial: obraSocial.trim(), emergencyContactName: emergencyContactName.trim(), emergencyContactPhone: emergencyContactPhone.trim(), birthDate: birthDate ? new Date(birthDate).toISOString() : player.birthDate?.toISOString(), clubFeePayments, paidPlayerRightsYears: paidYears, notes });
             if (player.userId) {
-                try { await updateDoc(doc(db, 'users', player.userId), { name: name.trim(), dni: dni.trim(), phone: phone.trim() }); } catch (e) { console.log('Linked user update error:', e); }
+                try { await updateDoc(doc(db, 'users', player.userId), { name: name.trim(), dni: dni.trim(), phone: phone.trim(), obraSocial: obraSocial.trim(), emergencyContactName: emergencyContactName.trim(), emergencyContactPhone: emergencyContactPhone.trim() }); } catch (e) { console.log('Linked user update error:', e); }
             }
             onSuccess();
         } catch (e) { alert('Error: ' + e.message); } finally { setLoading(false); }
@@ -110,9 +121,12 @@ function EditPlayerDialog({ player, onClose, onSuccess }) {
         <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
             <DialogTitle>Editar Jugador</DialogTitle>
             <DialogContent>
-                <TextField fullWidth label="Nombre" value={name} onChange={e => setName(e.target.value)} sx={{ mt: 1 }} />
+                <TextField fullWidth label="Nombre, Apellido (apodo)" value={name} onChange={e => setName(e.target.value)} sx={{ mt: 1 }} />
                 <TextField fullWidth label="DNI" value={dni} onChange={e => setDni(e.target.value)} sx={{ mt: 2 }} />
                 <TextField fullWidth label="Teléfono" value={phone} onChange={e => setPhone(e.target.value)} sx={{ mt: 2 }} />
+                <TextField fullWidth label="Obra Social (Opcional)" value={obraSocial} onChange={e => setObraSocial(e.target.value)} sx={{ mt: 2 }} />
+                <TextField fullWidth label="Contacto Emergencia (Nombre) (Opcional)" value={emergencyContactName} onChange={e => setEmergencyContactName(e.target.value)} sx={{ mt: 2 }} />
+                <TextField fullWidth label="Contacto Emergencia (Teléfono) (Opcional)" value={emergencyContactPhone} onChange={e => setEmergencyContactPhone(e.target.value)} sx={{ mt: 2 }} />
                 <TextField fullWidth label="Fecha de Nacimiento" type="date" value={birthDate} onChange={e => setBirthDate(e.target.value)} sx={{ mt: 2 }} InputLabelProps={{ shrink: true }} />
                 <Divider sx={{ my: 2 }} />
                 <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Cuotas del Club ({currentYear})</Typography>
@@ -129,6 +143,26 @@ function EditPlayerDialog({ player, onClose, onSuccess }) {
                         <ListItemText primary={`Año ${y}`} />
                     </ListItemButton>
                 ))}
+                <Divider sx={{ my: 2 }} />
+                <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Notas / Observaciones</Typography>
+                <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
+                    <TextField size="small" fullWidth placeholder="Nueva nota..." value={newNote} onChange={e => setNewNote(e.target.value)} />
+                    <Button variant="contained" onClick={handleAddNote} disabled={!newNote.trim()}>Agregar</Button>
+                </Box>
+                {notes.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>No hay notas registradas.</Typography>
+                ) : (
+                    <List dense disablePadding sx={{ mb: 2 }}>
+                        {notes.map((n, i) => (
+                            <ListItem key={i} sx={{ bgcolor: 'action.hover', mb: 1, borderRadius: 1 }}>
+                                <ListItemText
+                                    primary={n.text}
+                                    secondary={new Date(n.date).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+                                />
+                            </ListItem>
+                        ))}
+                    </List>
+                )}
             </DialogContent>
             <DialogActions>
                 <Button onClick={onClose} color="inherit">Cancelar</Button>

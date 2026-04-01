@@ -20,6 +20,6 @@ export function attendanceModelToMap(attendance) {
         presentPlayerIds: attendance.presentPlayerIds,
         absentPlayerIds: attendance.absentPlayerIds,
         latePlayerIds: attendance.latePlayerIds,
-        notes: attendance.notes,
+        notes: attendance.notes || null,
     };
 }

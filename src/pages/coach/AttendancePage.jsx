@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { AttendanceObservationsManager } from './AttendanceHistory';
+import { doc, getDoc, updateDoc, arrayUnion } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { getAllDivisions, getPlayersByDivision, createAttendance, getAttendanceByDivision } from '../../services/firestoreService';
 import {
@@ -27,7 +28,7 @@ export default function AttendancePage() {
     const [attendanceDate, setAttendanceDate] = useState(new Date().toISOString().split('T')[0]);
     const [attendanceType, setAttendanceType] = useState('training');
     const [attendanceMap, setAttendanceMap] = useState({});
-    const [notes, setNotes] = useState('');
+    const [newObservation, setNewObservation] = useState('');
     const [saving, setSaving] = useState(false);
     const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
     const [customTypes, setCustomTypes] = useState([]);
@@ -46,7 +47,6 @@ export default function AttendancePage() {
                     const aDate = data.date?.toDate ? data.date.toDate() : new Date(data.date);
                     setAttendanceDate(aDate.toISOString().split('T')[0]);
                     setAttendanceType(data.type);
-                    setNotes(data.notes || '');
                 }
             } catch (e) {
                 console.error("Error fetching edit data:", e);
@@ -152,29 +152,44 @@ export default function AttendancePage() {
             const latePlayerIds = Object.entries(attendanceMap).filter(([, s]) => s === 'late').map(([id]) => id);
 
             if (editId) {
-                await updateDoc(doc(db, 'attendance', editId), {
+                const updateData = {
                     date: new Date(attendanceDate),
                     divisionId: selectedDivision,
                     type: attendanceType,
                     presentPlayerIds,
                     absentPlayerIds,
                     latePlayerIds,
-                    notes: notes || null,
-                });
+                };
+                if (newObservation.trim()) {
+                    updateData.observations = arrayUnion({
+                        text: newObservation.trim(),
+                        date: new Date().toISOString(),
+                        authorName: userModel?.name || 'Usuario'
+                    });
+                }
+                await updateDoc(doc(db, 'attendance', editId), updateData);
                 setSnackbar({ open: true, message: 'Asistencia actualizada correctamente', severity: 'success' });
                 setTimeout(() => navigate('/coach/history'), 1500);
             } else {
-                await createAttendance({
+                const createData = {
                     date: new Date(attendanceDate),
                     divisionId: selectedDivision,
                     type: attendanceType,
                     presentPlayerIds,
                     absentPlayerIds,
                     latePlayerIds,
-                    notes: notes || null,
-                });
+                };
+                if (newObservation.trim()) {
+                    createData.observations = [{
+                        text: newObservation.trim(),
+                        date: new Date().toISOString(),
+                        authorName: userModel?.name || 'Usuario'
+                    }];
+                }
+                await createAttendance(createData);
                 setSnackbar({ open: true, message: 'Asistencia guardada correctamente', severity: 'success' });
-                setNotes('');
+                setNewObservation('');
+                setTimeout(() => navigate('/coach/history'), 1500);
             }
         } catch (error) {
             console.error('Error saving attendance:', error);
@@ -282,8 +297,35 @@ export default function AttendancePage() {
                 {/* Notes & Save */}
                 <Card sx={{ mt: 2 }}>
                     <CardContent sx={{ p: 2 }}>
-                        <TextField fullWidth multiline rows={2} label="Observaciones (opcional)" value={notes}
-                            onChange={(e) => setNotes(e.target.value)} size="small" />
+                        {editId && editingAttendance ? (
+                            <Box sx={{ mb: 2 }}>
+                                <AttendanceObservationsManager 
+                                    record={editingAttendance} 
+                                    activeRole={userModel?.roles?.[0] || 'coach'}
+                                    onAdd={(rId, text) => {
+                                        setEditingAttendance(prev => {
+                                            const obs = prev.observations || [];
+                                            return { ...prev, observations: [{ text: text.trim(), date: new Date().toISOString(), authorName: userModel?.name || 'Usuario' }, ...obs] };
+                                        });
+                                    }}
+                                    onEdit={(rId, originalObs, newText) => {
+                                        setEditingAttendance(prev => {
+                                            const arr = prev.observations || [];
+                                            return { ...prev, observations: arr.map(o => o.date === originalObs.date ? { ...o, text: newText.trim() } : o) };
+                                        });
+                                    }}
+                                    onDelete={(rId, obsToDelete) => {
+                                        setEditingAttendance(prev => {
+                                            const arr = prev.observations || [];
+                                            return { ...prev, observations: arr.filter(o => o.date !== obsToDelete.date) };
+                                        });
+                                    }}
+                                />
+                            </Box>
+                        ) : (
+                            <TextField fullWidth multiline rows={2} label="Agregar observacion (opcional)" value={newObservation}
+                                onChange={(e) => setNewObservation(e.target.value)} size="small" />
+                        )}
                         <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 2 }}>
                             <Button variant="contained" startIcon={<SaveIcon />} onClick={handleSave}
                                 disabled={saving || players.length === 0} size="large">
@@ -292,7 +334,6 @@ export default function AttendancePage() {
                         </Box>
                     </CardContent>
                 </Card>
-
                 <Snackbar open={snackbar.open} autoHideDuration={4000} onClose={() => setSnackbar({ ...snackbar, open: false })} anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}>
                     <Alert severity={snackbar.severity} onClose={() => setSnackbar({ ...snackbar, open: false })} sx={{ borderRadius: 2 }}>{snackbar.message}</Alert>
                 </Snackbar>

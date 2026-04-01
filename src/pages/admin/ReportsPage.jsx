@@ -70,13 +70,23 @@ export default function ReportsPage({ allowedDivisionIds = null }) {
                     const divId = data.divisionId;
                     const normalizedDate = `${String(attDate.getDate()).padStart(2, '0')}/${String(attDate.getMonth() + 1).padStart(2, '0')}/${attDate.getFullYear()}`;
                     divisionTotalClasses[divId] = (divisionTotalClasses[divId] || 0) + 1;
+
+                    let combinedNotes = data.notes ? `${data.notes} ` : '';
+                    if (data.observations && data.observations.length > 0) {
+                        combinedNotes += data.observations.map(o => `[${o.authorName}]: ${o.text}`).join(' | ');
+                    }
+                    combinedNotes = combinedNotes.trim();
+
                     const presentIds = data.presentPlayerIds || [];
                     const lateIds = data.latePlayerIds || [];
                     [...presentIds, ...lateIds].forEach(pid => {
                         playerAttendanceCount[pid] = (playerAttendanceCount[pid] || 0) + 1;
-                        if (data.notes) { if (!playerNotes[pid]) playerNotes[pid] = []; playerNotes[pid].push(`${normalizedDate}: ${data.notes}`); }
+                        if (combinedNotes) {
+                            if (!playerNotes[pid]) playerNotes[pid] = [];
+                            playerNotes[pid].push(`${normalizedDate}: ${combinedNotes}`);
+                        }
                     });
-                    allSessions.push({ ...data, date: attDate, normalizedDate });
+                    allSessions.push({ ...data, date: attDate, normalizedDate, _combinedNotes: combinedNotes });
                 }
                 allSessions.sort((a, b) => a.date - b.date);
             }
@@ -89,7 +99,7 @@ export default function ReportsPage({ allowedDivisionIds = null }) {
                     const sessionDiv = divMap[session.divisionId] || '';
                     const sessionDate = session.normalizedDate;
                     const sessionType = session.type === 'training' ? 'Entrenamiento' : session.type === 'match' ? 'Partido' : session.type;
-                    sheetData.push([sessionDate, sessionType, session.notes || '', '', '', '', sessionDiv]);
+                    sheetData.push([sessionDate, sessionType, session._combinedNotes || '', '', '', '', sessionDiv]);
                     const divPlayers = players.filter(p => p.divisionId === session.divisionId);
                     for (const p of divPlayers) {
                         let status = 'Ausente';

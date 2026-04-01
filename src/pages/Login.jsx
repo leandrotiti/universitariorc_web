@@ -1,15 +1,17 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { sendPasswordResetEmail } from 'firebase/auth';
+import { auth } from '../config/firebase';
 import { getPrimaryRole, RoleDashboardRoutes, RoleLabels } from '../models/UserModel';
 import {
     Box, Card, CardContent, TextField, Button, Typography,
     InputAdornment, IconButton, Alert, CircularProgress, Fade,
-    Dialog, DialogTitle, DialogContent, DialogActions, Avatar, Divider
+    Dialog, DialogTitle, DialogContent, DialogActions, Avatar, Divider, Link
 } from '@mui/material';
 import {
     Visibility, VisibilityOff, Person as PersonIcon, Lock as LockIcon,
-    Login as LoginIcon, SwapHoriz as SwapIcon,
+    Login as LoginIcon, SwapHoriz as SwapIcon, Email as EmailIcon
 } from '@mui/icons-material';
 
 const roleColors = { admin: '#e53935', coach: '#43a047', player: '#8e24aa', parent: '#00897b', manager: '#1e88e5', block_admin: '#fb8c00' };
@@ -21,6 +23,11 @@ export default function Login() {
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
     const [rolePickerUser, setRolePickerUser] = useState(null);
+    const [forgotPasswordOpen, setForgotPasswordOpen] = useState(false);
+    const [resetEmail, setResetEmail] = useState('');
+    const [resetLoading, setResetLoading] = useState(false);
+    const [resetSuccess, setResetSuccess] = useState('');
+    const [resetError, setResetError] = useState('');
     const { signIn, switchRole } = useAuth();
     const navigate = useNavigate();
 
@@ -162,10 +169,80 @@ export default function Login() {
                             >
                                 {loading ? 'Ingresando...' : 'Ingresar'}
                             </Button>
+
+                            <Box sx={{ textAlign: 'center', mt: 2 }}>
+                                <Link
+                                    component="button"
+                                    type="button"
+                                    variant="body2"
+                                    onClick={() => {
+                                        setResetError('');
+                                        setResetSuccess('');
+                                        setResetEmail('');
+                                        setForgotPasswordOpen(true);
+                                    }}
+                                    sx={{ color: 'text.secondary', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}
+                                >
+                                    ¿Olvidaste tu contraseña?
+                                </Link>
+                            </Box>
                         </form>
                     </CardContent>
                 </Card>
             </Fade>
+
+            {/* Forgot Password Dialog */}
+            <Dialog open={forgotPasswordOpen} onClose={() => !resetLoading && setForgotPasswordOpen(false)} maxWidth="xs" fullWidth>
+                <DialogTitle sx={{ textAlign: 'center', pb: 1 }}>
+                    <EmailIcon color="primary" sx={{ fontSize: 40, mb: 1 }} />
+                    <Typography variant="h6" fontWeight={700}>Recuperar Contraseña</Typography>
+                </DialogTitle>
+                <DialogContent>
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                        Ingresá tu correo electrónico y te enviaremos un enlace para que puedas restablecer tu contraseña.
+                    </Typography>
+
+                    {resetError && <Alert severity="error" sx={{ mb: 2 }}>{resetError}</Alert>}
+                    {resetSuccess && <Alert severity="success" sx={{ mb: 2 }}>{resetSuccess}</Alert>}
+
+                    <TextField
+                        fullWidth
+                        label="Correo Electrónico"
+                        type="email"
+                        value={resetEmail}
+                        onChange={(e) => setResetEmail(e.target.value)}
+                        disabled={resetLoading || !!resetSuccess}
+                        autoFocus
+                    />
+                </DialogContent>
+                <DialogActions sx={{ px: 3, pb: 3 }}>
+                    <Button onClick={() => setForgotPasswordOpen(false)} disabled={resetLoading}>
+                        Cancelar
+                    </Button>
+                    <Button 
+                        variant="contained" 
+                        onClick={async () => {
+                            if (!resetEmail.trim()) return setResetError('Por favor, ingresá tu email.');
+                            setResetLoading(true);
+                            setResetError('');
+                            try {
+                                await sendPasswordResetEmail(auth, resetEmail.trim());
+                                setResetSuccess('Enlace enviado. Por favor, revisá tu casilla de correo (y la carpeta de Spam).');
+                                setTimeout(() => setForgotPasswordOpen(false), 5000);
+                            } catch (err) {
+                                console.error('Reset error:', err);
+                                if (err.code === 'auth/user-not-found') setResetError('No existe un usuario con ese correo.');
+                                else setResetError('Error al enviar el correo. Verificá los datos.');
+                            } finally {
+                                setResetLoading(false);
+                            }
+                        }} 
+                        disabled={resetLoading || !!resetSuccess}
+                    >
+                        {resetLoading ? 'Enviando...' : 'Enviar Enlace'}
+                    </Button>
+                </DialogActions>
+            </Dialog>
 
             {/* Role Picker Dialog */}
             <Dialog open={!!rolePickerUser} maxWidth="xs" fullWidth
