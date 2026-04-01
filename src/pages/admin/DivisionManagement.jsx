@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import {
     Box, Card, Typography, IconButton, Button, TextField, Dialog, DialogTitle, DialogContent,
     DialogActions, Accordion, AccordionSummary, AccordionDetails, List, ListItem, ListItemAvatar,
@@ -11,7 +11,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { db, secondaryApp } from '../../config/firebase';
 import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
-import { collection, query, where, onSnapshot, doc, updateDoc, deleteDoc, getDocs, writeBatch, setDoc, arrayRemove } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, getDoc, updateDoc, deleteDoc, getDocs, writeBatch, setDoc, arrayRemove } from 'firebase/firestore';
 import { divisionModelFromMap } from '../../models/DivisionModel';
 import { playerModelFromMap } from '../../models/PlayerModel';
 import { userModelFromMap, RoleLabels, getDisplayName } from '../../models/UserModel';
@@ -589,6 +589,13 @@ function EditPlayerDialog({ player, onClose, onSuccess }) {
                 <Button onClick={onClose} color="inherit">Cancelar</Button>
                 <Button onClick={handleSave} variant="contained" disabled={loading}>{loading ? 'Guardando...' : 'Guardar'}</Button>
             </DialogActions>
+
+            <AddressDialog
+                open={addressOpen}
+                initialAddress={playerAddress}
+                onClose={() => setAddressOpen(false)}
+                onSave={(addr) => setPlayerAddress(addr)}
+            />
         </Dialog>
     );
 }
