@@ -82,9 +82,16 @@ export async function checkUserBirthdays(userModel, activeRole) {
 
     // 3. Filter Birthdays
     const birthdayNotifications = [];
+    const processedKeys = new Set();
 
     const addBirthday = (person, type) => {
+        const key = person.dni ? `dni_${person.dni}` : `name_${(person.name || person.nickname || '').toLowerCase().trim()}`;
+        
+        if (processedKeys.has(key)) return;
+
         if (isBirthdayActive(person.birthDate)) {
+            processedKeys.add(key);
+
             // Create a pseudo-notification
             const isToday = () => {
                 const bd = new Date(person.birthDate);
@@ -109,7 +116,10 @@ export async function checkUserBirthdays(userModel, activeRole) {
     
     // Avoid re-alerting user for their own birthday? Let's keep it fun and show it anyway, or exclude them:
     scopeUsers.forEach(u => {
-        if (u.id !== userModel.id) addBirthday(u, u.roles.includes(UserRole.coach) ? 'Entrenador' : 'Usuario');
+        if (u.id !== userModel.id) {
+            const type = u.roles.includes(UserRole.coach) ? 'Entrenador' : (u.roles.includes(UserRole.manager) ? 'Manager' : 'Usuario');
+            addBirthday(u, type);
+        }
     });
 
     return birthdayNotifications;
