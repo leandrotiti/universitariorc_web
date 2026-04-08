@@ -14,6 +14,7 @@ import { playerModelFromMap } from '../../models/PlayerModel';
 import { divisionModelFromMap } from '../../models/DivisionModel';
 import { AddressModel } from '../../models/AddressModel';
 import AddressDialog from '../../components/shared/AddressDialog';
+import { deleteUser } from '../../services/firestoreService';
 
 export default function UserManagement() {
     const [users, setUsers] = useState([]);
@@ -64,7 +65,7 @@ export default function UserManagement() {
     const handleDelete = async (user) => {
         if (!window.confirm(`¿Estás seguro de que querés eliminar al usuario "${user.name}"?\nEsta acción no se puede deshacer.`)) return;
         try {
-            await deleteDoc(doc(db, 'users', user.id));
+            await deleteUser(user.id);
             setSnack({ open: true, msg: 'Usuario eliminado', severity: 'success' });
         } catch (e) {
             console.error('Delete user error:', e);

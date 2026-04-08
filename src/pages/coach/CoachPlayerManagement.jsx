@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { db } from '../../config/firebase';
 import { collection, query, where, onSnapshot, doc, updateDoc, deleteDoc, getDoc } from 'firebase/firestore';
+import { deletePlayer } from '../../services/firestoreService';
 import { divisionModelFromMap } from '../../models/DivisionModel';
 import { playerModelFromMap } from '../../models/PlayerModel';
 import {
@@ -34,7 +35,7 @@ export default function CoachPlayerManagement() {
     const handleDelete = async (player) => {
         if (!window.confirm(`¿Estás seguro de que querés eliminar la ficha del jugador "${player.name}"?\nEsta acción no se puede deshacer.`)) return;
         try {
-            await deleteDoc(doc(db, 'players', player.id));
+            await deletePlayer(player.id);
             setSnack({ open: true, msg: 'Jugador eliminado', severity: 'success' });
         } catch (e) {
             console.error('Delete player error:', e);

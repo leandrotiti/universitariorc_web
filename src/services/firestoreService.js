@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, query, where, onSnapshot, addDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, query, where, onSnapshot, addDoc, writeBatch } from 'firebase/firestore';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { db } from '../config/firebase';
 import { userModelFromMap, userModelToMap } from '../models/UserModel';
@@ -35,7 +35,16 @@ export async function updateUser(user) {
 }
 
 export async function deleteUser(userId) {
+    // Delete the user document
     await deleteDoc(doc(db, 'users', userId));
+    // Delete any associated player records
+    const q = query(collection(db, 'players'), where('userId', '==', userId));
+    const snap = await getDocs(q);
+    if (!snap.empty) {
+        const batch = writeBatch(db);
+        snap.docs.forEach(d => batch.delete(d.ref));
+        await batch.commit();
+    }
 }
 
 export async function createUserInFirestore(userData) {
@@ -103,7 +112,51 @@ export async function updatePlayer(player) {
 }
 
 export async function deletePlayer(playerId) {
-    await deleteDoc(doc(db, 'players', playerId));
+    const playerRef = doc(db, 'players', playerId);
+    const snap = await getDoc(playerRef);
+    if (!snap.exists()) return;
+    
+    const playerData = snap.data();
+
+    // Restricción: No permitir borrar si el jugador tiene asistencias
+    if (playerData.divisionId) {
+        const attQuery = query(collection(db, 'attendance'), where('divisionId', '==', playerData.divisionId));
+        const attSnap = await getDocs(attQuery);
+        
+        const hasAttendance = attSnap.docs.some(d => {
+            const data = d.data();
+            return (data.presentPlayerIds || []).includes(playerId) || 
+                   (data.absentPlayerIds || []).includes(playerId) || 
+                   (data.latePlayerIds || []).includes(playerId);
+        });
+
+        if (hasAttendance) {
+            throw new Error('No se puede eliminar el jugador porque tiene registros de asistencia asociados en su división histórica.');
+        }
+    }
+
+    await deleteDoc(playerRef);
+
+    if (playerData.userId) {
+        const userRef = doc(db, 'users', playerData.userId);
+        const userSnap = await getDoc(userRef);
+        if (userSnap.exists()) {
+            const userData = userSnap.data();
+            const roles = userData.roles || [];
+            if (roles.length <= 1 && roles.includes('player')) {
+                // User only has the 'player' role, so safely delete the entire user
+                await deleteDoc(userRef);
+            } else if (roles.includes('player')) {
+                // User has multiple roles, just remove the 'player' role
+                const newRoles = roles.filter(r => r !== 'player');
+                await updateDoc(userRef, {
+                    roles: newRoles,
+                    role: newRoles[0] || 'user',
+                    assignedDivisionId: null
+                });
+            }
+        }
+    }
 }
 
 export function subscribeToPlayers(divisionId, callback) {

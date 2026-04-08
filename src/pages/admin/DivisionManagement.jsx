@@ -12,6 +12,7 @@ import { useNavigate } from 'react-router-dom';
 import { db, secondaryApp } from '../../config/firebase';
 import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
 import { collection, query, where, onSnapshot, doc, getDoc, updateDoc, deleteDoc, getDocs, writeBatch, setDoc, arrayRemove } from 'firebase/firestore';
+import { deletePlayer } from '../../services/firestoreService';
 import { divisionModelFromMap } from '../../models/DivisionModel';
 import { playerModelFromMap } from '../../models/PlayerModel';
 import { userModelFromMap, RoleLabels, getDisplayName } from '../../models/UserModel';
@@ -249,7 +250,7 @@ function DivisionPlayerList({ division, onEditPlayer, onCreatePlayer, snack }) {
     const handleDeletePlayer = async (player) => {
         if (!window.confirm(`¿Eliminar la ficha del jugador ${player.name}?`)) return;
         try {
-            await deleteDoc(doc(db, 'players', player.id));
+            await deletePlayer(player.id);
             snack({ open: true, msg: `Jugador "${player.name}" eliminado`, severity: 'success' });
         } catch (e) {
             console.error('Delete player error:', e);

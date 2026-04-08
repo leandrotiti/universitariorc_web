@@ -92,19 +92,28 @@ export async function checkUserBirthdays(userModel, activeRole) {
         if (isBirthdayActive(person.birthDate)) {
             processedKeys.add(key);
 
-            // Create a pseudo-notification
-            const isToday = () => {
-                const bd = new Date(person.birthDate);
-                const today = new Date();
-                return bd.getDate() === today.getDate() && bd.getMonth() === today.getMonth();
-            };
+            const bd = new Date(person.birthDate);
+            const today = new Date();
+            const isToday = bd.getDate() === today.getDate() && bd.getMonth() === today.getMonth();
 
-            const dayText = isToday() ? '¡Hoy' : 'Recientemente';
+            let targetAge = today.getFullYear() - bd.getFullYear();
+            const m = today.getMonth() - bd.getMonth();
+            // Si el mes actual es menor al del cumpleaños, o es el mismo mes pero el día actual es anterior al del cumple
+            // significa que el cumpleaños "reciente" fue del año pasado (diciembre vs enero)
+            if (m < 0 || (m === 0 && today.getDate() < bd.getDate())) {
+                targetAge--;
+            }
+
+            const formattedDate = bd.toLocaleDateString('es-AR', { day: 'numeric', month: 'long' });
+            
+            const title = isToday 
+                ? `¡Hoy es el cumpleaños de ${person.name || person.nickname}! 🎂` 
+                : `El ${formattedDate} fue el cumpleaños de ${person.name || person.nickname} 🎂`;
             
             birthdayNotifications.push({
                 id: `bday_${person.id}`,
-                title: `${dayText} fue el cumpleaños de ${person.name || person.nickname}! 🎂`,
-                body: `Saluda a ${person.name} (${type}) en su día.`,
+                title: title,
+                body: `Cumplió ${targetAge} años. ¡Saluda a ${person.name} (${type})!`,
                 senderName: 'Sistema',
                 createdAt: new Date(),
                 isBirthday: true

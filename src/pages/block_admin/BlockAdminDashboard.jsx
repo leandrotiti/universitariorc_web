@@ -19,6 +19,7 @@ import {
 import { db, secondaryApp } from '../../config/firebase';
 import { getAuth, createUserWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
 import { collection, query, where, onSnapshot, doc, updateDoc, deleteDoc, getDocs, getDoc, writeBatch, setDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
+import { deletePlayer } from '../../services/firestoreService';
 import { AddressModel } from '../../models/AddressModel';
 import AddressDialog from '../../components/shared/AddressDialog';
 import PlayerAttendanceDialog from '../../components/shared/PlayerAttendanceDialog';
@@ -564,7 +565,7 @@ function BlockDivisionPlayerList({ division, onCreatePlayer, onEditPlayer, snack
     const handleDeletePlayer = async (player) => {
         if (!window.confirm(`¿Eliminar la ficha del jugador ${player.name}?`)) return;
         try {
-            await deleteDoc(doc(db, 'players', player.id));
+            await deletePlayer(player.id);
             snack({ open: true, msg: `Jugador "${player.name}" eliminado`, severity: 'success' });
         } catch (e) {
             console.error('Delete player error:', e);
