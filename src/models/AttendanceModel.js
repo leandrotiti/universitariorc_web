@@ -8,6 +8,7 @@ export function attendanceModelFromMap(map) {
         absentPlayerIds: map.absentPlayerIds || [],
         latePlayerIds: map.latePlayerIds || [],
         notes: map.notes || null,
+        observations: map.observations || [],
     };
 }
 
@@ -21,5 +22,6 @@ export function attendanceModelToMap(attendance) {
         absentPlayerIds: attendance.absentPlayerIds,
         latePlayerIds: attendance.latePlayerIds,
         notes: attendance.notes || null,
+        observations: attendance.observations || [],
     };
 }

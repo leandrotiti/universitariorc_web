@@ -6,6 +6,7 @@ import { divisionModelFromMap, divisionModelToMap } from '../models/DivisionMode
 import { playerModelFromMap, playerModelToMap } from '../models/PlayerModel';
 import { attendanceModelFromMap, attendanceModelToMap } from '../models/AttendanceModel';
 import { blockModelFromMap, blockModelToMap } from '../models/BlockModel';
+import { notificationModelFromMap, notificationModelToMap } from '../models/NotificationModel';
 
 // ============== USER SERVICES ==============
 
@@ -172,3 +173,22 @@ export function subscribeToBlocks(callback) {
         callback(blocks);
     });
 }
+
+// ============== NOTIFICATION SERVICES ==============
+
+export async function createNotification(notifData) {
+    const docRef = doc(collection(db, 'notifications'));
+    const notif = { ...notifData, id: docRef.id };
+    await setDoc(docRef, notificationModelToMap(notif));
+    return notif;
+}
+
+export function subscribeToActiveNotifications(callback) {
+    const nowISO = new Date().toISOString();
+    const q = query(collection(db, 'notifications'), where('expirationDate', '>=', nowISO));
+    return onSnapshot(q, (snapshot) => {
+        const notifs = snapshot.docs.map((d) => notificationModelFromMap(d.data()));
+        callback(notifs);
+    });
+}
+

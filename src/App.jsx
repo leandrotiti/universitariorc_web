@@ -19,6 +19,7 @@ import PlayerDashboard from './pages/player/PlayerDashboard';
 import ParentDashboard from './pages/parent/ParentDashboard';
 import BlockAdminDashboard from './pages/block_admin/BlockAdminDashboard';
 import ProfilePage from './pages/Profile';
+import SendNotificationPage from './pages/shared/SendNotificationPage';
 import { UserRole } from './models/UserModel';
 import { getPrimaryRole, RoleDashboardRoutes } from './models/UserModel';
 import { Box, CircularProgress } from '@mui/material';
@@ -81,6 +82,11 @@ function App() {
               <Route path="/admin/reports" element={
                 <ProtectedRoute allowedRoles={[UserRole.admin]}>
                   <ReportsPage />
+                </ProtectedRoute>
+              } />
+              <Route path="/admin/notifications" element={
+                <ProtectedRoute allowedRoles={[UserRole.admin]}>
+                  <SendNotificationPage />
                 </ProtectedRoute>
               } />
 
@@ -157,6 +163,11 @@ function App() {
               <Route path="/block-admin/reports" element={
                 <ProtectedRoute allowedRoles={[UserRole.block_admin]}>
                   <BlockAdminDashboard page="reports" />
+                </ProtectedRoute>
+              } />
+              <Route path="/block-admin/notifications" element={
+                <ProtectedRoute allowedRoles={[UserRole.block_admin]}>
+                  <SendNotificationPage />
                 </ProtectedRoute>
               } />
 

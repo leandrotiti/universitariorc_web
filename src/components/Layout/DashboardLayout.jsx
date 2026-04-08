@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { getPrimaryRole, RoleLabels, RoleDashboardRoutes, UserRole } from '../../models/UserModel';
@@ -12,8 +12,11 @@ import {
     Sports as SportsIcon, EventNote as EventNoteIcon, Assessment as AssessmentIcon,
     Person as PersonIcon, Logout as LogoutIcon, ChevronLeft as ChevronLeftIcon,
     Groups as GroupsIcon, FamilyRestroom as FamilyIcon, AdminPanelSettings as AdminIcon,
-    SportsScore as CoachIcon, SwapHoriz as SwapIcon,
+    SportsScore as CoachIcon, SwapHoriz as SwapIcon, Notifications as NotificationsIcon,
 } from '@mui/icons-material';
+import Badge from '@mui/material/Badge';
+import { subscribeToActiveNotifications, getAllDivisions, getAllBlocks } from '../../services/firestoreService';
+import { checkUserBirthdays } from '../../utils/notificationUtils';
 
 const DRAWER_WIDTH = 280;
 
@@ -24,6 +27,7 @@ const roleMenuItems = {
         { label: 'Divisiones', icon: <GroupsIcon />, path: '/admin/divisions' },
         { label: 'Bloques', icon: <SportsIcon />, path: '/admin/blocks' },
         { label: 'Reportes', icon: <AssessmentIcon />, path: '/admin/reports' },
+        { label: 'Notificar', icon: <NotificationsIcon />, path: '/admin/notifications' },
     ],
     [UserRole.coach]: [
         { label: 'Dashboard', icon: <DashboardIcon />, path: '/coach' },
@@ -41,6 +45,7 @@ const roleMenuItems = {
         { label: 'Divisiones', icon: <GroupsIcon />, path: '/block-admin/divisions' },
         { label: 'Usuarios', icon: <PeopleIcon />, path: '/block-admin/users' },
         { label: 'Reportes', icon: <AssessmentIcon />, path: '/block-admin/reports' },
+        { label: 'Notificar', icon: <NotificationsIcon />, path: '/block-admin/notifications' },
     ],
     [UserRole.player]: [
         { label: 'Dashboard', icon: <DashboardIcon />, path: '/player' },
@@ -69,11 +74,64 @@ export default function DashboardLayout() {
     const [mobileOpen, setMobileOpen] = useState(false);
     const [anchorEl, setAnchorEl] = useState(null);
     const [logoutDialogOpen, setLogoutDialogOpen] = useState(false);
+    
+    const [notifications, setNotifications] = useState([]);
+    const [notifAnchorEl, setNotifAnchorEl] = useState(null);
 
     // Use activeRole from context (supports multi-role switching)
     const currentRole = activeRole || getPrimaryRole(userModel);
     const menuItems = roleMenuItems[currentRole] || [];
     const hasMultipleRoles = userModel?.roles?.length > 1;
+
+    // Fetch Notifications
+    useEffect(() => {
+        if (!userModel) return;
+
+        let unsub;
+        const fetchNotifs = async () => {
+            const role = activeRole || getPrimaryRole(userModel);
+
+            // Fetch birthdays
+            const bdays = await checkUserBirthdays(userModel, role);
+            
+            // Sub to manual notifications
+            unsub = subscribeToActiveNotifications(async (manualNotifs) => {
+                let targetDivisionIds = [];
+                const allDivs = await getAllDivisions();
+                
+                if (role === UserRole.admin) {
+                     targetDivisionIds = 'ALL';
+                } else if (role === UserRole.block_admin) {
+                     if (userModel.assignedBlockId) {
+                         const allBlocks = await getAllBlocks();
+                         const myBlock = allBlocks.find(b => b.id === userModel.assignedBlockId);
+                         if (myBlock) targetDivisionIds = myBlock.divisionIds || [];
+                     }
+                } else if (role === UserRole.coach) {
+                     const myDivs = allDivs.filter(d => d.coachIds && d.coachIds.includes(userModel.id));
+                     targetDivisionIds = [...new Set([...(userModel.assignedDivisionIds || []), ...myDivs.map(d => d.id)])];
+                } else if (role === UserRole.manager) {
+                     targetDivisionIds = userModel.assignedDivisionIds || [];
+                }
+
+                const filteredManual = manualNotifs.filter(n => {
+                    const ids = n.targetDivisionIds || [];
+                    if (ids.includes('ALL')) return true;
+                    if (targetDivisionIds === 'ALL') return true;
+                    if (Array.isArray(targetDivisionIds)) {
+                        return ids.some(id => targetDivisionIds.includes(id));
+                    }
+                    return false;
+                });
+
+                const combined = [...bdays, ...filteredManual].sort((a,b) => b.createdAt.getTime() - a.createdAt.getTime());
+                setNotifications(combined);
+            });
+        };
+
+        fetchNotifs();
+        return () => { if (unsub) unsub(); }
+    }, [userModel, activeRole]);
 
     const handleDrawerToggle = () => setMobileOpen(!mobileOpen);
     const handleProfileMenu = (e) => setAnchorEl(e.currentTarget);
@@ -202,6 +260,48 @@ export default function DashboardLayout() {
                         <Typography variant="h6" sx={{ flex: 1, fontWeight: 700 }}>
                             Universitario RC
                         </Typography>
+                        
+                        <Tooltip title="Notificaciones">
+                            <IconButton onClick={(e) => setNotifAnchorEl(e.currentTarget)} sx={{ mr: 1 }}>
+                                <Badge badgeContent={notifications.length} color="error" overlap="circular" 
+                                    max={9} sx={{ '& .MuiBadge-badge': { fontWeight: 700, fontSize: '0.65rem' } }}>
+                                    <NotificationsIcon />
+                                </Badge>
+                            </IconButton>
+                        </Tooltip>
+
+                        <Menu
+                            anchorEl={notifAnchorEl}
+                            open={Boolean(notifAnchorEl)}
+                            onClose={() => setNotifAnchorEl(null)}
+                            TransitionComponent={Fade}
+                            PaperProps={{
+                                sx: { mt: 1, minWidth: 320, maxWidth: 360, maxHeight: 400, overflowY: 'auto' }
+                            }}
+                        >
+                            <Box sx={{ p: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #eee', mb: 1 }}>
+                                <Typography variant="subtitle1" fontWeight={700}>Notificaciones</Typography>
+                            </Box>
+                            {notifications.length === 0 ? (
+                                <MenuItem disabled><Typography variant="body2" sx={{ py: 2, textAlign: 'center', width: '100%' }}>No hay notificaciones</Typography></MenuItem>
+                            ) : (
+                                notifications.map(n => (
+                                    <Box key={n.id} sx={{ px: 2, py: 1.5, borderBottom: '1px solid #f5f5f5' }}>
+                                        <Typography variant="subtitle2" fontWeight={700} color={n.isBirthday ? 'primary' : 'textPrimary'}>
+                                            {n.title}
+                                        </Typography>
+                                        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, whiteSpace: 'pre-line' }}>
+                                            {n.body}
+                                        </Typography>
+                                        <Typography variant="caption" color="text.disabled" sx={{ mt: 1, display: 'block' }}>
+                                            {n.createdAt && typeof n.createdAt.toLocaleString === 'function' ? n.createdAt.toLocaleString() : ''} 
+                                            {n.senderName && !n.isBirthday ? ` • De: ${n.senderName}` : ''}
+                                        </Typography>
+                                    </Box>
+                                ))
+                            )}
+                        </Menu>
+
                         <Tooltip title="Mi cuenta">
                             <IconButton onClick={handleProfileMenu}>
                                 <Avatar sx={{ bgcolor: 'primary.main', width: 36, height: 36, fontSize: '0.9rem' }}>
