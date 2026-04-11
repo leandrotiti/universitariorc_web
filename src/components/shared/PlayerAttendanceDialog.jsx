@@ -28,7 +28,7 @@ export default function PlayerAttendanceDialog({ player, open, onClose }) {
                     date: data.date?.toDate ? data.date.toDate() : new Date(data.date)
                 };
             }).filter(a => {
-                if (a.date.getFullYear() !== currentYear) return false;
+                if (a.date.getUTCFullYear() !== currentYear) return false;
                 const inPresent = (a.presentPlayerIds || []).includes(player.id);
                 const inLate = (a.latePlayerIds || []).includes(player.id);
                 const inAbsent = (a.absentPlayerIds || []).includes(player.id);
@@ -43,7 +43,7 @@ export default function PlayerAttendanceDialog({ player, open, onClose }) {
 
     const filtered = useMemo(() => {
         if (selectedMonth === 'all') return attendances;
-        return attendances.filter(a => a.date.getMonth() === parseInt(selectedMonth));
+        return attendances.filter(a => a.date.getUTCMonth() === parseInt(selectedMonth));
     }, [attendances, selectedMonth]);
 
     const stats = useMemo(() => {
@@ -128,7 +128,7 @@ export default function PlayerAttendanceDialog({ player, open, onClose }) {
                         {filtered.map(record => {
                             const status = getStatusInfo(record);
                             if (!status) return null;
-                            const dateStr = record.date.toLocaleDateString('es-AR', { weekday: 'long', day: '2-digit', month: 'long' });
+                            const dateStr = record.date.toLocaleDateString('es-AR', { timeZone: 'UTC', weekday: 'long', day: '2-digit', month: 'long' });
                             return (
                                 <Card key={record.id} variant="outlined" sx={{ display: 'flex', alignItems: 'center', p: 1.5, borderRadius: 2, bgcolor: 'background.paper' }}>
                                     <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 44, height: 44, borderRadius: '50%', bgcolor: `${status.color}.light`, color: `${status.color}.main`, mr: 2 }}>

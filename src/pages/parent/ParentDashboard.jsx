@@ -95,7 +95,7 @@ export default function ParentDashboard() {
                                         <CardContent sx={{ p: 2, '&:last-child': { pb: 2 }, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                             <Box>
                                                 <Typography variant="body1" fontWeight={600}>
-                                                    {record.date.toLocaleDateString('es-AR', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
+                                                    {record.date.toLocaleDateString('es-AR', { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
                                                 </Typography>
                                                 <Chip label={typeLabels[record.type] || record.type} size="small" variant="outlined" />
                                             </Box>

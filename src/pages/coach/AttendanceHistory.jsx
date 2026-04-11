@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useParams, useNavigate } from 'react-router-dom';
 import { db } from '../../config/firebase';
@@ -234,7 +234,7 @@ export default function AttendanceHistory({ allowedDivisionIds }) {
                 )}
 
                 {filtered.map(record => {
-                    const dateStr = record.date.toLocaleDateString('es-AR', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
+                    const dateStr = record.date.toLocaleDateString('es-AR', { timeZone: 'UTC', weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
                     const typeName = translateType(record.type);
                     const presentCount = (record.presentPlayerIds || []).length;
                     const divName = showAllDivisions ? divsMap[record.divisionId]?.name : null;
